@@ -1,0 +1,32 @@
+{
+  "name": "loudin",
+  "version": "1.0.0",
+  "description": "Loudin — IoT door lock management platform",
+  "private": true,
+  "scripts": {
+    "dev": "concurrently \"npm run dev:api\" \"npm run dev:web\"",
+    "dev:api": "cd apps/api && npm run dev",
+    "dev:web": "cd apps/web && npm run dev",
+    "start:api": "cd apps/api && npm start",
+    "build:web": "cd apps/web && npm run build",
+    "db:migrate": "cd apps/api && npm run db:migrate",
+    "db:seed": "cd apps/api && npm run db:seed",
+    "db:reset": "cd apps/api && npm run db:reset",
+    "install:all": "cd apps/api && npm install && cd ../web && npm install"
+  },
+  "keywords": [
+    "iot",
+    "door-lock",
+    "access-control",
+    "multi-tenant",
+    "self-hosted"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/simkura-tech/loudin.git"
+  },
+  "license": "MIT",
+  "devDependencies": {
+    "concurrently": "^8.2.2"
+  }
+}

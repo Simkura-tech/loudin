@@ -1,0 +1,77 @@
+# One-command local evaluation stack.
+#
+#   docker compose up --build
+#
+# Then open http://localhost:8081 and log in with the seeded platform admin:
+#
+#   platform-admin@loudin.com / Password123!
+#
+# (All seeded users share that password — see apps/api/database/seeds/seed.sql
+# for the reseller and end-user admins.)
+#
+# First boot runs migrations + the dev seed automatically; both are
+# idempotent, so restarts and `docker compose up` after a code change are
+# safe. This stack is for evaluation/development only — production runs on
+# VMs with systemd (docs/operations/deployment.md).
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: loudin
+      POSTGRES_USER: loudin
+      # Reachable only inside the compose network — fine for local evaluation.
+      POSTGRES_PASSWORD: loudin_dev_password
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U loudin -d loudin"]
+      interval: 5s
+      timeout: 5s
+      retries: 12
+    # Deliberately not published to the host so it can't clash with a local
+    # Postgres. Uncomment to inspect the DB directly:
+    # ports:
+    #   - "5434:5432"
+
+  api:
+    build: ./apps/api
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      NODE_ENV: development
+      PORT: "3000"
+      HOST: 0.0.0.0
+      DB_HOST: postgres
+      DB_PORT: "5432"
+      DB_NAME: loudin
+      DB_USER: loudin
+      DB_PASSWORD: loudin_dev_password
+      # INSECURE dev-only secret. Never reuse in any real deployment —
+      # generate one with: openssl rand -base64 48
+      JWT_SECRET: insecure-dev-only-secret-do-not-use-in-production
+      JWT_EXPIRE: 24h
+      FRONTEND_URL: http://localhost:8081
+      CORS_ORIGIN: http://localhost:8081
+      SIGNUPS_ENABLED: "true"
+      # Optional integrations (Resend email, Twilio SMS, Google OAuth,
+      # Simkura devices) are unset on purpose — the app runs without them.
+      # See "Optional services & degraded features" in README.md.
+    volumes:
+      - api_uploads:/app/uploads
+    # The browser reaches the API through the web container's nginx proxy.
+    # Publish 3000 only if you want to curl the API directly:
+    # ports:
+    #   - "3000:3000"
+
+  web:
+    build: ./apps/web
+    depends_on:
+      - api
+    ports:
+      - "8081:80"
+
+volumes:
+  pgdata:
+  api_uploads:

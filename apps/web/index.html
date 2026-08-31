@@ -1,0 +1,37 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <link rel="icon" type="image/png" href="/icon-circle.png" />
+    <link rel="apple-touch-icon" href="/icon-circle.png" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="theme-color" content="#3E63DD" />
+    <!-- Neutral fallback title/description only. This file can't import TS,
+         so the branded title is set at runtime from src/branding.ts (see the
+         document.title effect in src/App.tsx). White-label deployments that
+         care about social previews should also edit the og:/twitter: tags
+         below by hand — see docs/white-label.md. -->
+    <meta name="description" content="Cellular-connected access control. No wiring, no on-prem servers." />
+    <title>Access control</title>
+
+    <!-- Social previews. Static site-wide defaults — social crawlers don't
+         run JS, so these CANNOT be driven by src/branding.ts. og:image should
+         be an absolute URL served from /public (crawlers can't resolve bundled
+         assets); set these for your deployment. -->
+    <meta property="og:type" content="website" />
+    <meta property="og:site_name" content="Access control" />
+    <meta property="og:title" content="Access control" />
+    <meta property="og:description" content="Smart door locks with built-in cellular. No wiring, no gateways, no on-prem servers." />
+    <meta name="twitter:card" content="summary" />
+    <meta name="twitter:title" content="Access control" />
+    <meta name="twitter:description" content="Smart door locks with built-in cellular. No wiring, no gateways, no on-prem servers." />
+    <!-- Inter font -->
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet" />
+  </head>
+  <body>
+    <div id="root"></div>
+    <script type="module" src="/src/main.tsx"></script>
+  </body>
+</html>

@@ -1,0 +1,378 @@
+/**
+ * User Page Styles
+ * User detail page, profile cards, and user management layouts
+ */
+
+/* ============================================
+   Page Layout
+   ============================================ */
+.user-detail-page {
+  padding: 2rem;
+  max-width: 1400px;
+  margin: 0 auto;
+}
+
+/* Header */
+.user-detail-page__header {
+  margin-bottom: 2rem;
+}
+
+.user-detail-page__back {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.5rem;
+  color: var(--color-text-secondary);
+  text-decoration: none;
+  font-size: 0.875rem;
+  transition: color 0.2s;
+}
+
+.user-detail-page__back:hover {
+  color: var(--color-accent-primary);
+}
+
+/* ============================================
+   Profile Card
+   ============================================ */
+.user-detail-page__profile {
+  background: var(--color-bg-secondary);
+  border-radius: 12px;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.1);
+  padding: 2rem;
+  margin-bottom: 2rem;
+}
+
+.user-detail-page__profile-header {
+  display: flex;
+  align-items: center;
+  gap: 1.5rem;
+  margin-bottom: 2rem;
+  padding-bottom: 2rem;
+  border-bottom: 1px solid var(--color-border-primary);
+}
+
+.user-detail-page__avatar {
+  width: 80px;
+  height: 80px;
+  border-radius: 50%;
+  background: linear-gradient(135deg, var(--color-accent-primary) 0%, var(--color-accent-hover) 100%);
+  color: white;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 2rem;
+  font-weight: 600;
+  text-transform: uppercase;
+}
+
+.user-detail-page__profile-info {
+  flex: 1;
+}
+
+.user-detail-page__name {
+  font-size: 1.875rem;
+  font-weight: 700;
+  color: var(--color-text-primary);
+  margin: 0 0 0.5rem 0;
+}
+
+.user-detail-page__role {
+  display: inline-block;
+  padding: 0.375rem 0.75rem;
+  background: var(--color-info-light);
+  color: var(--color-info);
+  border-radius: 6px;
+  font-size: 0.875rem;
+  font-weight: 500;
+}
+
+.user-detail-page__profile-details {
+  display: flex;
+  flex-direction: column;
+  gap: 1rem;
+  margin-bottom: 2rem;
+  padding-bottom: 2rem;
+  border-bottom: 1px solid var(--color-border-primary);
+}
+
+.user-detail-page__detail-item {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  color: var(--color-text-secondary);
+  font-size: 0.9375rem;
+}
+
+.user-detail-page__detail-item svg {
+  color: var(--color-text-tertiary);
+}
+
+.user-detail-page__profile-meta {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+  gap: 2rem;
+}
+
+.user-detail-page__meta-item {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+
+.user-detail-page__meta-label {
+  font-size: 0.8125rem;
+  color: var(--color-text-secondary);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  font-weight: 500;
+}
+
+.user-detail-page__meta-value {
+  font-size: 1rem;
+  color: var(--color-text-primary);
+  font-weight: 500;
+}
+
+.user-detail-page__status {
+  display: inline-block;
+  padding: 0.375rem 0.75rem;
+  border-radius: 6px;
+  font-size: 0.875rem;
+  font-weight: 500;
+  text-transform: capitalize;
+}
+
+.user-detail-page__status--active {
+  background: var(--color-success-light);
+  color: var(--color-success);
+}
+
+.user-detail-page__status--inactive {
+  background: var(--color-error-light);
+  color: var(--color-error);
+}
+
+/* ============================================
+   Credentials Section
+   ============================================ */
+.user-detail-page__credentials {
+  background: var(--color-bg-secondary);
+  border-radius: 12px;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.1);
+  padding: 2rem;
+}
+
+.user-detail-page__credentials-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 2rem;
+  padding-bottom: 1.5rem;
+  border-bottom: 1px solid var(--color-border-primary);
+}
+
+.user-detail-page__credentials-title {
+  display: flex;
+  align-items: center;
+  gap: 1rem;
+}
+
+.user-detail-page__credentials-title svg {
+  color: var(--color-accent-primary);
+}
+
+.user-detail-page__credentials-title h2 {
+  font-size: 1.5rem;
+  font-weight: 700;
+  color: var(--color-text-primary);
+  margin: 0;
+}
+
+.user-detail-page__credentials-count {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 32px;
+  height: 32px;
+  padding: 0 0.75rem;
+  background: var(--color-info-light);
+  color: var(--color-info);
+  border-radius: 16px;
+  font-size: 0.875rem;
+  font-weight: 600;
+}
+
+.user-detail-page__credentials-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(350px, 1fr));
+  gap: 1.5rem;
+}
+
+/* ============================================
+   Empty State
+   ============================================ */
+.user-detail-page__empty {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  padding: 4rem 2rem;
+  text-align: center;
+}
+
+.user-detail-page__empty-icon {
+  color: var(--color-border-secondary);
+  margin-bottom: 1rem;
+}
+
+.user-detail-page__empty-text {
+  color: var(--color-text-secondary);
+  font-size: 1rem;
+  margin-bottom: 1.5rem;
+}
+
+/* ============================================
+   Buttons
+   ============================================ */
+.user-detail-page__btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.625rem 1.25rem;
+  border-radius: 8px;
+  font-size: 0.9375rem;
+  font-weight: 500;
+  border: none;
+  cursor: pointer;
+  transition: all 0.2s;
+}
+
+.user-detail-page__btn--primary {
+  background: var(--color-accent-primary);
+  color: white;
+}
+
+.user-detail-page__btn--primary:hover {
+  background: var(--color-accent-hover);
+  box-shadow: 0 4px 6px rgba(59, 130, 246, 0.2);
+}
+
+/* ============================================
+   Modal
+   ============================================ */
+.user-detail-page__modal {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  background: rgba(0, 0, 0, 0.5);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 1000;
+  padding: 1rem;
+}
+
+.user-detail-page__modal-content {
+  background: var(--color-bg-secondary);
+  border-radius: 12px;
+  width: 100%;
+  max-width: 600px;
+  max-height: 90vh;
+  overflow-y: auto;
+  box-shadow: 0 20px 25px -5px rgba(0, 0, 0, 0.1);
+}
+
+.user-detail-page__modal-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 1.5rem;
+  border-bottom: 1px solid var(--color-border-primary);
+}
+
+.user-detail-page__modal-title {
+  font-size: 1.25rem;
+  font-weight: 700;
+  color: var(--color-text-primary);
+  margin: 0;
+}
+
+.user-detail-page__modal-close {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 32px;
+  height: 32px;
+  border: none;
+  background: transparent;
+  color: var(--color-text-secondary);
+  font-size: 1.5rem;
+  cursor: pointer;
+  border-radius: 6px;
+  transition: all 0.2s;
+}
+
+.user-detail-page__modal-close:hover {
+  background: var(--color-bg-tertiary);
+  color: var(--color-text-primary);
+}
+
+/* ============================================
+   Loading State
+   ============================================ */
+.user-detail-page__loading {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 400px;
+  color: var(--color-text-secondary);
+  font-size: 1rem;
+}
+
+/* ============================================
+   Responsive Styles
+   ============================================ */
+@media (max-width: 768px) {
+  .user-detail-page {
+    padding: 1rem;
+  }
+
+  .user-detail-page__profile {
+    padding: 1.5rem;
+  }
+
+  .user-detail-page__profile-header {
+    flex-direction: column;
+    text-align: center;
+  }
+
+  .user-detail-page__avatar {
+    width: 64px;
+    height: 64px;
+    font-size: 1.5rem;
+  }
+
+  .user-detail-page__name {
+    font-size: 1.5rem;
+  }
+
+  .user-detail-page__credentials {
+    padding: 1.5rem;
+  }
+
+  .user-detail-page__credentials-header {
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 1rem;
+  }
+
+  .user-detail-page__credentials-title {
+    flex-wrap: wrap;
+  }
+
+  .user-detail-page__credentials-grid {
+    grid-template-columns: 1fr;
+  }
+}

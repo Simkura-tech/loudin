@@ -1,0 +1,415 @@
+/**
+ * Card Components
+ * Plan cards, credential cards, and general card styles
+ */
+
+/* ============================================
+   Base Card Styles
+   ============================================ */
+.card {
+  background: var(--color-bg-secondary);
+  border: 1px solid var(--color-border-primary);
+  border-radius: 12px;
+  padding: 1.5rem;
+  transition: all 0.3s ease;
+}
+
+.card:hover {
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.1);
+  transform: translateY(-2px);
+}
+
+/* ============================================
+   Plan Card Component
+   ============================================ */
+.plan-card {
+  position: relative;
+  background: var(--color-bg-secondary);
+  border: 2px solid var(--color-border-primary);
+  border-radius: 12px;
+  padding: 2rem;
+  display: flex;
+  flex-direction: column;
+  gap: 1.5rem;
+  transition: all 0.3s ease;
+  height: 100%;
+}
+
+.plan-card:hover {
+  border-color: var(--color-accent-primary);
+  box-shadow: 0 10px 30px rgba(59, 130, 246, 0.15);
+  transform: translateY(-4px);
+}
+
+.plan-card.featured {
+  border-color: var(--color-accent-primary);
+  box-shadow: 0 4px 12px rgba(59, 130, 246, 0.2);
+}
+
+.plan-card.current {
+  border-color: var(--color-success);
+  background: var(--color-success-light);
+}
+
+.plan-card-badge {
+  position: absolute;
+  top: -12px;
+  right: 20px;
+  background: linear-gradient(135deg, var(--color-accent-primary) 0%, var(--color-accent-hover) 100%);
+  color: white;
+  padding: 0.5rem 1rem;
+  border-radius: 20px;
+  font-size: 0.75rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  box-shadow: 0 4px 8px rgba(59, 130, 246, 0.3);
+}
+
+.plan-card-current-badge {
+  position: absolute;
+  top: -12px;
+  left: 20px;
+  background: linear-gradient(135deg, var(--color-success) 0%, #059669 100%);
+  color: white;
+  padding: 0.5rem 1rem;
+  border-radius: 20px;
+  font-size: 0.75rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  box-shadow: 0 4px 8px rgba(16, 185, 129, 0.3);
+}
+
+.plan-card-header {
+  text-align: center;
+}
+
+.plan-card-name {
+  font-size: 1.75rem;
+  font-weight: 700;
+  color: var(--color-text-primary);
+  margin-bottom: 0.5rem;
+}
+
+.plan-card-description {
+  font-size: 0.95rem;
+  color: var(--color-text-secondary);
+  margin: 0;
+}
+
+.plan-card-pricing {
+  text-align: center;
+  padding: 1.5rem 0;
+  border-top: 1px solid var(--color-border-primary);
+  border-bottom: 1px solid var(--color-border-primary);
+}
+
+.plan-card-price {
+  font-size: 3rem;
+  font-weight: 800;
+  color: var(--color-text-primary);
+  line-height: 1;
+}
+
+.plan-card-period {
+  font-size: 1rem;
+  font-weight: 500;
+  color: var(--color-text-secondary);
+}
+
+.plan-card-savings {
+  margin-top: 0.5rem;
+  font-size: 0.875rem;
+  font-weight: 600;
+  color: var(--color-success);
+  background: var(--color-success-light);
+  padding: 0.5rem 1rem;
+  border-radius: 6px;
+  display: inline-block;
+}
+
+.plan-card-yearly-hint {
+  margin-top: 0.5rem;
+  font-size: 0.8rem;
+  color: var(--color-text-tertiary);
+}
+
+.plan-card-trial {
+  text-align: center;
+  background: var(--color-info-light);
+  color: var(--color-info);
+  padding: 0.75rem 1rem;
+  border-radius: 8px;
+  font-size: 0.875rem;
+  font-weight: 600;
+}
+
+.plan-card-features {
+  flex: 1;
+}
+
+.plan-card-features-title {
+  font-size: 0.875rem;
+  font-weight: 700;
+  color: var(--color-text-primary);
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  margin-bottom: 0.75rem;
+}
+
+.plan-card-features-list {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+}
+
+.plan-card-feature {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.75rem;
+  padding: 0.5rem 0;
+  font-size: 0.95rem;
+  color: var(--color-text-secondary);
+}
+
+.plan-card-feature-icon {
+  color: var(--color-success);
+  font-weight: 700;
+  font-size: 1.1rem;
+  flex-shrink: 0;
+}
+
+.plan-card-limits {
+  margin-top: 1rem;
+}
+
+.plan-card-limits-title {
+  font-size: 0.875rem;
+  font-weight: 700;
+  color: var(--color-text-primary);
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  margin-bottom: 0.75rem;
+}
+
+.plan-card-limits-list {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+}
+
+.plan-card-limit {
+  padding: 0.5rem 0;
+  font-size: 0.9rem;
+  color: var(--color-text-secondary);
+  border-left: 3px solid var(--color-accent-primary);
+  padding-left: 0.75rem;
+  margin-bottom: 0.5rem;
+}
+
+.plan-card-footer {
+  margin-top: auto;
+}
+
+.plan-card-button {
+  font-weight: 600;
+  font-size: 1rem;
+  padding: 0.875rem 1.5rem;
+}
+
+.plan-card-button.featured {
+  background: linear-gradient(135deg, var(--color-accent-primary) 0%, var(--color-accent-hover) 100%);
+}
+
+.plan-card-button.current {
+  background: var(--color-success-light);
+  color: var(--color-success);
+  cursor: default;
+}
+
+.plan-card-button.current:hover {
+  background: var(--color-success-light);
+  transform: none;
+}
+
+/* ============================================
+   Credential Card Component
+   ============================================ */
+.credential-card {
+  background: var(--color-bg-secondary);
+  border: 1px solid var(--color-border-primary);
+  border-radius: 12px;
+  padding: 20px;
+  transition: all 0.3s ease;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.1);
+}
+
+.credential-card:hover {
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+  transform: translateY(-2px);
+}
+
+.credential-card__header {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  margin-bottom: 16px;
+  padding-bottom: 16px;
+  border-bottom: 1px solid var(--color-border-primary);
+}
+
+.credential-card__icon-wrapper {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 48px;
+  height: 48px;
+  background: linear-gradient(135deg, var(--color-accent-primary) 0%, var(--color-accent-hover) 100%);
+  border-radius: 12px;
+  flex-shrink: 0;
+}
+
+.credential-card__icon {
+  color: white;
+}
+
+.credential-card__title-section {
+  flex: 1;
+  min-width: 0;
+}
+
+.credential-card__title {
+  font-size: 1.125rem;
+  font-weight: 700;
+  color: var(--color-text-primary);
+  margin: 0 0 4px 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.credential-card__type {
+  font-size: 0.875rem;
+  color: var(--color-text-secondary);
+  margin: 0;
+}
+
+.credential-card__body {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  margin-bottom: 16px;
+}
+
+.credential-card__info-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  font-size: 0.875rem;
+}
+
+.credential-card__label {
+  color: var(--color-text-secondary);
+  font-weight: 500;
+}
+
+.credential-card__value {
+  color: var(--color-text-primary);
+  font-weight: 600;
+  text-align: right;
+}
+
+.credential-card__value--mono {
+  font-family: 'Courier New', monospace;
+  font-size: 0.8125rem;
+}
+
+.credential-card__value--warning {
+  color: var(--color-error);
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.credential-card__warning-icon {
+  color: var(--color-warning);
+}
+
+.credential-card__footer {
+  display: flex;
+  gap: 8px;
+  padding-top: 16px;
+  border-top: 1px solid var(--color-border-primary);
+}
+
+.credential-card__btn {
+  flex: 1;
+  padding: 10px 16px;
+  border-radius: 8px;
+  font-weight: 600;
+  font-size: 0.875rem;
+  text-align: center;
+  text-decoration: none;
+  transition: all 0.2s ease;
+  cursor: pointer;
+  border: none;
+}
+
+.credential-card__btn--primary {
+  background-color: var(--color-accent-primary);
+  color: white;
+}
+
+.credential-card__btn--primary:hover {
+  background-color: var(--color-accent-hover);
+  transform: translateY(-1px);
+}
+
+.credential-card__btn--danger {
+  background-color: var(--color-error-light);
+  color: var(--color-error);
+}
+
+.credential-card__btn--danger:hover {
+  background-color: #fecaca;
+}
+
+/* ============================================
+   Responsive Styles
+   ============================================ */
+@media (max-width: 768px) {
+  .plan-card {
+    padding: 1.5rem;
+  }
+
+  .plan-card-name {
+    font-size: 1.5rem;
+  }
+
+  .plan-card-price {
+    font-size: 2.5rem;
+  }
+
+  .plan-card-badge,
+  .plan-card-current-badge {
+    font-size: 0.7rem;
+    padding: 0.4rem 0.8rem;
+  }
+
+  .credential-card {
+    padding: 16px;
+  }
+
+  .credential-card__header {
+    flex-wrap: wrap;
+  }
+
+  .credential-card__title {
+    font-size: 1rem;
+  }
+
+  .credential-card__footer {
+    flex-direction: column;
+  }
+}

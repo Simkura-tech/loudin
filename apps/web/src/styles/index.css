@@ -1,0 +1,173 @@
+/**
+ * Main Stylesheet Entry Point
+ * All @import statements must come first (CSS spec requirement)
+ */
+
+/* Base Styles - Theme variables */
+@import './base/themes.css';
+
+/* Component Styles */
+@import './components/badges.css';
+@import './components/cards.css';
+@import './components/forms.css';
+
+/* Page Styles */
+@import './pages/credentials.css';
+@import './pages/users.css';
+
+/* Tailwind Directives */
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* ============================================
+   Tailwind Layer Customizations
+   ============================================ */
+
+@layer base {
+  body {
+    @apply antialiased;
+    background-color: var(--color-bg-primary);
+    color: var(--color-text-primary);
+  }
+}
+
+@layer components {
+  /* Primary Button */
+  .btn {
+    @apply px-4 py-2 rounded-lg transition-colors disabled:opacity-50 disabled:cursor-not-allowed font-medium;
+  }
+
+  .btn-primary {
+    @apply btn;
+    background-color: var(--color-accent-primary);
+    color: white;
+  }
+  .btn-primary:hover:not(:disabled) {
+    background-color: var(--color-accent-hover);
+  }
+
+  /* Secondary Button */
+  .btn-secondary {
+    @apply btn border;
+    background-color: var(--color-bg-secondary);
+    color: var(--color-text-primary);
+    border-color: var(--color-border-primary);
+  }
+  .btn-secondary:hover:not(:disabled) {
+    background-color: var(--color-bg-tertiary);
+  }
+
+  /* Danger Button */
+  .btn-danger {
+    @apply btn;
+    background-color: var(--color-error);
+    color: white;
+  }
+  .btn-danger:hover:not(:disabled) {
+    background-color: #b91c1c;
+  }
+
+  /* Button Sizes */
+  .btn-sm {
+    @apply px-3 py-1.5 text-sm;
+  }
+  .btn-lg {
+    @apply px-6 py-3 text-lg;
+  }
+
+  /* Input Field */
+  .input-field {
+    @apply w-full px-3 py-2 rounded-lg focus:ring-2 outline-none transition-all border;
+    background-color: var(--color-bg-secondary);
+    color: var(--color-text-primary);
+    border-color: var(--color-border-primary);
+  }
+  .input-field:focus {
+    border-color: var(--color-accent-primary);
+    box-shadow: 0 0 0 3px var(--color-accent-lighter);
+  }
+  .input-field::placeholder {
+    color: var(--color-text-tertiary);
+  }
+
+  /* Select Field */
+  .select-field {
+    @apply w-full px-3 py-2 rounded-lg outline-none transition-all border cursor-pointer;
+    background-color: var(--color-bg-secondary);
+    color: var(--color-text-primary);
+    border-color: var(--color-border-primary);
+  }
+  .select-field:focus {
+    border-color: var(--color-accent-primary);
+    box-shadow: 0 0 0 3px var(--color-accent-lighter);
+  }
+
+  /* Card Components (Tailwind utilities) */
+  .card {
+    @apply rounded-lg shadow-lg border p-6;
+    background-color: var(--color-bg-secondary);
+    border-color: var(--color-border-primary);
+  }
+
+  .card-header {
+    @apply border-b pb-4 mb-4;
+    border-color: var(--color-border-primary);
+  }
+
+  .card-body {
+    @apply p-0;
+  }
+
+  /* Page Layout */
+  .page-container {
+    @apply p-6 space-y-6;
+  }
+
+  .page-header {
+    @apply mb-6;
+  }
+
+  .page-title {
+    @apply text-3xl font-bold;
+    color: var(--color-text-primary);
+  }
+
+  .page-description {
+    @apply mt-1 text-sm;
+    color: var(--color-text-secondary);
+  }
+
+  /* Animations */
+  .animate-slide-in {
+    animation: slideIn 0.3s ease-out;
+  }
+
+  .animate-fade-in {
+    animation: fadeIn 0.2s ease-out;
+  }
+}
+
+/* ============================================
+   Keyframes
+   ============================================ */
+
+@keyframes slideIn {
+  from {
+    transform: translateX(100%);
+    opacity: 0;
+  }
+  to {
+    transform: translateX(0);
+    opacity: 1;
+  }
+}
+
+@keyframes fadeIn {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}

@@ -1,0 +1,9 @@
+[Unit]
+Description=Retry due webhook deliveries every minute
+
+[Timer]
+OnCalendar=minutely
+AccuracySec=5s
+
+[Install]
+WantedBy=timers.target

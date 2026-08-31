@@ -1,0 +1,82 @@
+/**
+ * Theme CSS Variables
+ * Defines color schemes for light (company) and dark (admin) themes
+ */
+
+/* Company Light Theme (Default) - Clean Grayscale */
+:root,
+.theme-company-light {
+  /* Background colors - Pure grayscale */
+  --color-bg-primary: #ffffff;      /* Main background */
+  --color-bg-secondary: #fafafa;    /* Cards, panels */
+  --color-bg-tertiary: #f5f5f5;     /* Hover states */
+  --color-bg-hover: #ebebeb;        /* Pressed/active states */
+
+  /* Text colors - Pure grayscale */
+  --color-text-primary: #171717;    /* Main text */
+  --color-text-secondary: #525252;  /* Muted text */
+  --color-text-tertiary: #a3a3a3;   /* Disabled text */
+
+  /* Border colors - Pure grayscale */
+  --color-border-primary: #e5e5e5;  /* Main borders */
+  --color-border-secondary: #d4d4d4; /* Subtle borders */
+  --color-border-tertiary: #a3a3a3; /* Accent borders */
+
+  /* Primary/Accent colors - Grayscale */
+  --color-accent-primary: #171717;  /* Primary (dark for light theme) */
+  --color-accent-hover: #262626;    /* Primary hover */
+  --color-accent-light: #f5f5f5;    /* Primary background */
+  --color-accent-lighter: #fafafa;  /* Primary subtle */
+
+  /* Status colors - Keep for functionality */
+  --color-success: #16a34a;
+  --color-success-light: #dcfce7;
+  --color-error: #dc2626;
+  --color-error-light: #fee2e2;
+  --color-warning: #ea580c;
+  --color-warning-light: #fed7aa;
+  --color-info: #525252;            /* Info - grayscale */
+  --color-info-light: #f5f5f5;
+}
+
+/* Admin Dark Theme - Pure Grayscale */
+.theme-admin-dark {
+  /* Background colors - Pure grayscale */
+  --color-bg-primary: #141414;      /* Main background */
+  --color-bg-secondary: #1a1a1a;    /* Cards, panels */
+  --color-bg-tertiary: #262626;     /* Hover states */
+  --color-bg-hover: #333333;        /* Pressed/active states */
+
+  /* Text colors - Pure grayscale */
+  --color-text-primary: #f5f5f5;    /* Main text */
+  --color-text-secondary: #a3a3a3;  /* Muted text */
+  --color-text-tertiary: #737373;   /* Disabled text */
+
+  /* Border colors - Pure grayscale */
+  --color-border-primary: #2e2e2e;  /* Main borders */
+  --color-border-secondary: #404040; /* Subtle borders */
+  --color-border-tertiary: #525252; /* Accent borders */
+
+  /* Primary/Accent colors - Grayscale (no blue) */
+  --color-accent-primary: #e5e5e5;  /* Primary (light gray for dark theme) */
+  --color-accent-hover: #f5f5f5;    /* Primary hover */
+  --color-accent-light: #262626;    /* Primary background */
+  --color-accent-lighter: #333333;  /* Primary subtle */
+
+  /* Status colors - Keep for functionality */
+  --color-success: #22c55e;
+  --color-success-light: #14532d;
+  --color-error: #ef4444;
+  --color-error-light: #7f1d1d;
+  --color-warning: #f97316;
+  --color-warning-light: #7c2d12;
+  --color-info: #a3a3a3;            /* Info - grayscale */
+  --color-info-light: #262626;
+}
+
+/* Smooth theme transitions */
+* {
+  transition-property: background-color, border-color, color;
+  transition-duration: 200ms;
+  transition-timing-function: ease-in-out;
+}

@@ -1,0 +1,6 @@
+# Keep the app and auth flows out of the search index.
+User-agent: *
+Disallow: /app/
+Disallow: /login
+Disallow: /signup
+Allow: /

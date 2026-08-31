@@ -1,0 +1,14 @@
+[Unit]
+Description=Loudin webhook delivery retries
+After=network.target cloud-sql-proxy.service
+Requires=cloud-sql-proxy.service
+
+[Service]
+Type=oneshot
+User=root
+WorkingDirectory=/opt/loudin/apps/api
+EnvironmentFile=/opt/loudin/apps/api/.env
+ExecStart=/usr/bin/node scripts/deliver-webhooks.js
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=loudin-deliver-webhooks

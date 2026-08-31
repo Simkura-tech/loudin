@@ -1,0 +1,19 @@
+[Unit]
+Description=Loudin API
+After=network.target cloud-sql-proxy.service
+Requires=cloud-sql-proxy.service
+
+[Service]
+Type=simple
+User=root
+WorkingDirectory=/opt/loudin/apps/api
+EnvironmentFile=/opt/loudin/apps/api/.env
+ExecStart=/usr/bin/node server.js
+Restart=always
+RestartSec=5
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=loudin-api
+
+[Install]
+WantedBy=multi-user.target

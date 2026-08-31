@@ -1,0 +1,49 @@
+# Hardware
+
+Device/lock hardware integrations. Simkura is the supported hardware platform —
+all MQTT and device traffic goes through Simkura Core; Loudin never talks to
+devices directly.
+
+```
+hardware/
+└── simkura/
+    ├── simkuraClient.js        # HTTP client for the Simkura Core API
+    ├── integration.js          # descriptor for the platform Integrations UI
+    ├── deviceDiscoveryWorker.js
+    ├── stateSyncWorker.js
+    └── config/
+```
+
+## Simkura
+
+`simkura/simkuraClient.js` handles device discovery, command routing, and
+Simkura-side webhook management. Credentials resolve via the platform-admin
+Integrations UI / env vars (`SIMKURA_API_URL`, `SIMKURA_API_KEY`) with
+optional per-reseller overrides via `companies.simkura_api_key` /
+`companies.simkura_api_url`.
+
+```javascript
+const simkura = require('../hardware/simkura');
+
+if (simkura.client.isAvailable()) {
+  const state = await simkura.client.getDeviceState(hardwareDeviceId);
+  await simkura.client.publishCommand(hardwareDeviceId, 'bwUnlock', {});
+}
+```
+
+To evaluate without hardware, point `SIMKURA_API_URL` at the Simkura mock API
+(hosted by simkura.com; returns realistic test data). See the project README
+for how to get real hardware and production API access.
+
+## Configuration — platform Integrations UI
+
+The Simkura connection settings (URL, API key) resolve through
+`services/platform/integrationSettings.js`: a `platform_config` row saved
+from the platform-admin **API access → Integrations** tab wins, env vars
+are the fallback. Clearing a field in the UI reverts to env. Timeouts and
+retry knobs remain env-only.
+
+The fields, status, and connection-test hooks are declared in
+`simkura/integration.js`, registered in
+`services/platform/integrationRegistry.js` — see
+[`docs/integrations/adding-an-integration.md`](../../../docs/integrations/adding-an-integration.md).
