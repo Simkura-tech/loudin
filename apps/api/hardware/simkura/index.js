@@ -15,10 +15,11 @@
 
 const client = require('./simkuraClient');
 const config = require('./config/simkuraConfig');
-const { SimkuraClient } = client;
+const { SimkuraClient, upstreamErrorMessage } = client;
 
 module.exports = {
   client,           // singleton instance
   SimkuraClient,    // class for per-reseller instances
+  upstreamErrorMessage, // human-readable message from a Simkura error response
   config,
 };

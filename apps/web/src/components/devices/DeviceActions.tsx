@@ -10,8 +10,8 @@
  *   • Unlock / Locked toggle — lock.set-state, reads device.door_state to
  *     decide which side of the toggle is "active"
  *   • Reboot — device.reboot, confirm-gated
- *   • Provisioning — opens a modal that fires lock.configure (cardType +
- *     latchInterval)
+ *   • Provisioning — opens a modal that fires lock.configure
+ *     (readerTechnology + latchInterval)
  *   • Re-sync — POST /api/devices/:id/push { force: true }: wipes the lock
  *     and re-pushes the full credential/schedule state from the platform.
  *     Confirm-gated (the lock briefly holds no credentials mid-rebuild).
@@ -281,10 +281,15 @@ const Select = styled.select`
 
 // ── Constants ────────────────────────────────────────────────────────────────
 
-const CARD_TYPES: { value: string; label: string }[] = [
-  { value: 'wiegand-26',        label: '26-bit Wiegand (default)' },
-  { value: 'hid-32',            label: '32-bit HID' },
-  { value: 'mifare-classic-1k', label: 'MIFARE Classic 1k' },
+// v2 lock.configure readerTechnology vocabulary — records which credential
+// reader the installer wired to this door (a platform fact, not a firmware
+// setting; card formats are firmware-implemented and not configurable).
+const READER_TECHNOLOGIES: { value: string; label: string }[] = [
+  { value: 'prox',      label: 'Prox — 125 kHz (default)' },
+  { value: 'smartcard', label: 'Smart card — 13.56 MHz' },
+  { value: 'nfc',       label: 'NFC' },
+  { value: 'ble',       label: 'Bluetooth (BLE)' },
+  { value: 'multi',     label: 'Multi-technology reader' },
 ];
 
 interface ConfirmState {
@@ -299,7 +304,7 @@ interface ConfirmState {
 }
 
 interface ProvisioningForm {
-  cardType: string;
+  readerTechnology: string;
   latchInterval: number;
 }
 
@@ -323,7 +328,7 @@ export function DeviceActions({ device, onCommandSent, onDeviceChanged }: Props)
   // Provisioning modal state
   const [provOpen, setProvOpen]     = useState(false);
   const [provForm, setProvForm]     = useState<ProvisioningForm>({
-    cardType: 'wiegand-26',
+    readerTechnology: 'prox',
     latchInterval: 5,
   });
   const [provSaving, setProvSaving] = useState(false);
@@ -402,7 +407,7 @@ export function DeviceActions({ device, onCommandSent, onDeviceChanged }: Props)
 
   const openProvisioning = () => {
     setProvForm({
-      cardType: 'wiegand-26',
+      readerTechnology: 'prox',
       latchInterval: 5,
     });
     setProvError(null);
@@ -415,7 +420,7 @@ export function DeviceActions({ device, onCommandSent, onDeviceChanged }: Props)
     setProvError(null);
     try {
       await devicesApi.sendCommand(device.device_id, 'lock.configure', {
-        cardType: provForm.cardType,
+        readerTechnology: provForm.readerTechnology,
         latchInterval: provForm.latchInterval,
       });
       setStatus({ tone: 'success', text: 'Provisioning sent.' });
@@ -577,16 +582,16 @@ export function DeviceActions({ device, onCommandSent, onDeviceChanged }: Props)
               </DialogHeader>
               <DialogBody>
                 <Field>
-                  <FieldLabel>Card reader type</FieldLabel>
+                  <FieldLabel>Reader technology</FieldLabel>
                   <Select
-                    value={provForm.cardType}
-                    onChange={(e) => setProvForm({ ...provForm, cardType: e.target.value })}
+                    value={provForm.readerTechnology}
+                    onChange={(e) => setProvForm({ ...provForm, readerTechnology: e.target.value })}
                   >
-                    {CARD_TYPES.map((t) => (
+                    {READER_TECHNOLOGIES.map((t) => (
                       <option key={t.value} value={t.value}>{t.label}</option>
                     ))}
                   </Select>
-                  <FieldHint>Determines how the device decodes the card reader output.</FieldHint>
+                  <FieldHint>Records which credential reader is wired to this door — shown on the device, applied immediately.</FieldHint>
                 </Field>
 
                 <Field>

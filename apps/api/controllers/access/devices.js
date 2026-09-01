@@ -13,6 +13,7 @@
 
 const { query } = require('../../database/db');
 const { recordAudit } = require('../../services/platform/audit');
+const { upstreamErrorMessage } = require('../../hardware/simkura');
 const events = require('../../integrations/events');
 
 const ALLOWED_STATUSES = ['online', 'offline', 'error', 'maintenance'];
@@ -449,7 +450,7 @@ async function searchUnclaimed(req, res, next) {
     } catch (err) {
       return res.status(502).json({
         error: 'Upstream error',
-        message: err.response?.data?.error || err.message || 'Simkura request failed',
+        message: upstreamErrorMessage(err),
       });
     }
 
@@ -532,7 +533,7 @@ async function claimDevice(req, res, next) {
       }
       return res.status(502).json({
         error: 'Upstream error',
-        message: err.response?.data?.error || err.message || 'Simkura request failed',
+        message: upstreamErrorMessage(err),
       });
     }
 

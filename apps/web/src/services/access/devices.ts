@@ -40,7 +40,8 @@ export interface Device {
     holidays: number | null;
     door_shifts: number | null;
   };
-  /** Provisioned reader type: 0=26-bit Wiegand, 1=32-bit HID, 2=Mifare 1k. */
+  /** v1-era provisioned reader type (0/1/2) — no longer refreshed by the v2
+   *  state sync; kept for rows that still carry it. */
   config_card_type: number | null;
   /** Momentary-unlock hold time in seconds. */
   latch_interval_s: number | null;
@@ -226,9 +227,11 @@ export const devicesApi = {
    * lock.set-state requires payload.state ∈ {'locked','unlocked','lockdown','normal'}
    * — 'normal' clears the override and returns the door to its schedule;
    * the other values pin the door in that state until changed.
-   * lock.configure accepts ≥1 of payload.cardType
-   * ('wiegand-26'|'hid-32'|'mifare-classic-1k'), payload.readerFrequency
-   * ('prox'|'smartCard'|'nfc'|'ble'), payload.latchInterval (1–255 s).
+   * lock.configure accepts ≥1 of payload.latchInterval (1–255 s, queued to
+   * the device) and payload.readerTechnology
+   * ('prox'|'smartcard'|'nfc'|'ble'|'multi', platform-recorded — which
+   * reader the installer wired to the door). Card formats are not
+   * configurable in v2 — firmware implements them.
    *
    * @param hwId Hardware device_id (unique at the source). Platform admins
    *   can target devices not yet claimed by any tenant.

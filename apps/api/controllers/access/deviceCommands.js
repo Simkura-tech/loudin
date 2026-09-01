@@ -7,6 +7,7 @@
  */
 
 const { query } = require('../../database/db');
+const { upstreamErrorMessage } = require('../../hardware/simkura');
 
 function badRequest(res, message, details) {
   return res.status(400).json({ error: 'Bad Request', message, ...(details && { details }) });
@@ -28,16 +29,19 @@ function notFound(res) {
 const ALLOWED_COMMANDS = new Set([
   'lock.unlock',    // momentary unlock (re-locks after latchInterval)
   'lock.set-state', // persistent door state, incl. 'normal' to clear an override
-  'lock.configure', // door reader/latch config (replaces v1 bwProvision)
+  'lock.configure', // door latch setting + reader-technology record
   'device.reboot',  // soft reboot, preserves data
 ]);
 
 // 'normal' clears the override: the door returns to schedule-driven
 // operation. The other three pin the door in that state (override flag set —
 // shifts won't flip it back until cleared).
-const LOCK_STATES       = new Set(['locked', 'unlocked', 'lockdown', 'normal']);
-const CARD_TYPES        = new Set(['wiegand-26', 'hid-32', 'mifare-classic-1k']);
-const READER_FREQUENCIES = new Set(['prox', 'smartCard', 'nfc', 'ble']);
+const LOCK_STATES = new Set(['locked', 'unlocked', 'lockdown', 'normal']);
+// v2 2.0.0: lock.configure takes latchInterval (queued to the device) and
+// readerTechnology (installer-recorded platform fact, applied immediately).
+// Card formats are firmware-implemented, not configurable — the old
+// cardType / readerFrequency fields are gone from the contract.
+const READER_TECHNOLOGIES = new Set(['prox', 'smartcard', 'nfc', 'ble', 'multi']);
 const DOOR = 1; // single-door model — same constant as devicePush
 
 // ── Authorization ────────────────────────────────────────────────────────────
@@ -82,7 +86,7 @@ async function authorizeDeviceAccess(req) {
 // Payload notes:
 //   lock.unlock    — no payload
 //   lock.set-state — payload.state ∈ {'locked','unlocked','lockdown','normal'}
-//   lock.configure — ≥1 of payload.{cardType, readerFrequency, latchInterval}
+//   lock.configure — ≥1 of payload.{latchInterval, readerTechnology}
 //   device.reboot  — no payload
 //
 // All commands are async: Simkura answers 202 with a queued-command record
@@ -109,23 +113,17 @@ async function sendCommand(req, res, next) {
       });
     }
     if (command === 'lock.configure') {
-      const { cardType, readerFrequency, latchInterval } = payload || {};
-      if (cardType == null && readerFrequency == null && latchInterval == null) {
+      const { readerTechnology, latchInterval } = payload || {};
+      if (readerTechnology == null && latchInterval == null) {
         return res.status(400).json({
           error: 'Bad Request',
-          message: 'lock.configure requires at least one of payload.{cardType, readerFrequency, latchInterval}',
+          message: 'lock.configure requires at least one of payload.{latchInterval, readerTechnology}',
         });
       }
-      if (cardType != null && !CARD_TYPES.has(cardType)) {
+      if (readerTechnology != null && !READER_TECHNOLOGIES.has(readerTechnology)) {
         return res.status(400).json({
           error: 'Bad Request',
-          message: `lock.configure cardType must be one of: ${[...CARD_TYPES].join(', ')}`,
-        });
-      }
-      if (readerFrequency != null && !READER_FREQUENCIES.has(readerFrequency)) {
-        return res.status(400).json({
-          error: 'Bad Request',
-          message: `lock.configure readerFrequency must be one of: ${[...READER_FREQUENCIES].join(', ')}`,
+          message: `lock.configure readerTechnology must be one of: ${[...READER_TECHNOLOGIES].join(', ')}`,
         });
       }
       if (latchInterval != null && (!Number.isInteger(latchInterval) || latchInterval < 1 || latchInterval > 255)) {
@@ -156,10 +154,9 @@ async function sendCommand(req, res, next) {
         case 'lock.unlock':    record = await simkura.unlockDoor(hwId, DOOR); break;
         case 'lock.set-state': record = await simkura.setLockState(hwId, DOOR, payload.state); break;
         case 'lock.configure': {
-          const { cardType, readerFrequency, latchInterval } = payload;
+          const { readerTechnology, latchInterval } = payload;
           record = await simkura.configureDoor(hwId, DOOR, {
-            ...(cardType != null ? { cardType } : {}),
-            ...(readerFrequency != null ? { readerFrequency } : {}),
+            ...(readerTechnology != null ? { readerTechnology } : {}),
             ...(latchInterval != null ? { latchInterval } : {}),
           });
           break;
@@ -174,7 +171,7 @@ async function sendCommand(req, res, next) {
       });
     } catch (err) {
       const upstreamStatus  = err.response?.status;
-      const upstreamMessage = err.response?.data?.error || err.message || 'Simkura command failed';
+      const upstreamMessage = upstreamErrorMessage(err, 'Simkura command failed');
       return res.status(502).json({
         error: 'Command failed',
         message: upstreamMessage,

@@ -4,8 +4,10 @@
  * Simkura v2 read-path mapping tests. Pure unit tests over the two mapping
  * functions — no network, no database.
  *
- * The fixture below is the live shape of GET /api/v2/devices/:id as served
- * by Simkura's public sandbox (docs.simkura.com), 2026-08-31.
+ * The fixture below mirrors GET /api/v2/devices/:id per the v2 2.0.0
+ * contract (simkura-core api/openapi/v2.yaml, 2026-09-01): features /
+ * supported / cardFormats spine tier, reader.protocol/technology,
+ * power.batteryChemistry.
  *
  * Set SIMKURA_SANDBOX_TESTS=1 to also run a live smoke test against the
  * public sandbox (skipped by default so CI stays hermetic).
@@ -14,7 +16,7 @@
 const { describe, test } = require('node:test');
 const assert = require('node:assert/strict');
 
-const { normalizeSpine } = require('../hardware/simkura/simkuraClient');
+const { normalizeSpine, upstreamErrorMessage } = require('../hardware/simkura/simkuraClient');
 const { fieldsFromState } = require('../hardware/simkura/stateSyncWorker');
 
 const V2_RESOURCE = {
@@ -29,14 +31,22 @@ const V2_RESOURCE = {
     version: 'rev-b', firmware: '2.3.4', numDoors: 1,
   },
   capabilities: ['lock-control', 'credential-store', 'schedules', 'power', 'connectivity'],
+  features: { 'door-position-sensing': false },
+  supported: {
+    'doors.reader.protocol': ['osdp', 'wiegand'],
+    'doors.reader.technology': ['prox', 'smartcard', 'nfc', 'ble', 'multi'],
+    cardFormats: ['26-bit', 'mifare-1k', 'hid-34', 'hid-37'],
+    'power.batteryChemistry': ['alkaline', 'lithium', 'li-ion'],
+  },
+  cardFormats: ['26-bit', 'mifare-1k', 'hid-34'],
   doors: [{
     door: 1, name: 'Front Door',
     lock: { state: 'locked', position: null, override: 2 },
-    reader: { type: 'osdp', connection: 'secure', frequency: 'prox' },
+    reader: { protocol: 'osdp', connection: 'secure', technology: 'prox' },
     latchInterval: 5,
     counts: { credentials: 105, shifts: 4, holidays: 0 },
   }],
-  power: { type: 'battery', state: 'sleep', batteryPct: 87, batteryHealth: 'ok', batteryType: 'alkaline' },
+  power: { type: 'battery', state: 'sleep', batteryPct: 87, batteryHealth: 'ok', batteryChemistry: 'alkaline' },
   connectivity: { transport: 'cellular', carrier: 'AT&T', signal: -76 },
 };
 
@@ -124,6 +134,29 @@ describe('Simkura v2 — fieldsFromState', () => {
   });
 });
 
+describe('Simkura v2 — upstreamErrorMessage', () => {
+  const httpErr = (data) => ({ message: 'Request failed with status code 422', response: { status: 422, data } });
+
+  test('v2 envelope: message preferred over the machine code; details appended', () => {
+    assert.equal(
+      upstreamErrorMessage(httpErr({ error: 'unsupported_feature', message: 'card format hid-37 is not available on this device' })),
+      'card format hid-37 is not available on this device');
+    assert.equal(
+      upstreamErrorMessage(httpErr({ error: 'invalid_params', message: 'Request invalid', details: ['latchInterval must be an integer 1-255', 'readerTechnology must be one of: prox, smartcard, nfc, ble, multi'] })),
+      'Request invalid — latchInterval must be an integer 1-255; readerTechnology must be one of: prox, smartcard, nfc, ble, multi');
+  });
+
+  test('older deployments: bare error string still surfaces', () => {
+    assert.equal(upstreamErrorMessage(httpErr({ error: 'Device not found' })), 'Device not found');
+  });
+
+  test('transport errors and fallback', () => {
+    assert.equal(upstreamErrorMessage({ message: 'connect ECONNREFUSED' }), 'connect ECONNREFUSED');
+    assert.equal(upstreamErrorMessage({}, 'unknown'), 'unknown');
+    assert.equal(upstreamErrorMessage(httpErr({}), 'unknown'), 'Request failed with status code 422');
+  });
+});
+
 describe('Simkura v2 — push mapping (devicePush._internal)', () => {
   const { credentialAddBody, credentialRemoveArgs, shiftAddBody, hhmmss } =
     require('../services/access/devicePush')._internal;
@@ -132,12 +165,13 @@ describe('Simkura v2 — push mapping (devicePush._internal)', () => {
     assert.deepEqual(
       credentialAddBody({ credential_type: 'pin', credential_value: '12345' }),
       { type: 'pin', class: 'master', pinCode: 12345 });
+    // 'HID' rows are the format old firmware mislabeled "32-bit" → hid-34.
     assert.deepEqual(
       credentialAddBody({ credential_type: 'HID', card_number: '4433221', facility_code: '12' }),
-      { type: 'hid-32', class: 'master', cardNumber: 4433221, facilityCode: 12 });
+      { type: 'hid-34', class: 'master', cardNumber: 4433221, facilityCode: 12 });
     assert.deepEqual(
       credentialAddBody({ credential_type: 'mifare', card_number: '998877', facility_code: null }),
-      { type: 'mifare-classic-1k', class: 'master', cardNumber: 998877, facilityCode: 0 });
+      { type: 'mifare-1k', class: 'master', cardNumber: 998877, facilityCode: 0 });
     assert.equal(credentialAddBody({ credential_type: 'retina-scan' }), null);
     assert.equal(credentialAddBody({ credential_type: 'pin', credential_value: 'not-a-pin' }), null);
   });

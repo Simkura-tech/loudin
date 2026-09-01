@@ -53,6 +53,24 @@ function normalizeSpine(item) {
   };
 }
 
+/**
+ * Human-readable message from a Simkura error response. The v2 error
+ * envelope is { error: <machine code>, message: <sentence>, details?: [...] }
+ * — prefer the sentence, append the structured details, fall back to the
+ * bare code (older deployments / v1 routes return prose there), then to the
+ * transport error.
+ */
+function upstreamErrorMessage(err, fallback = 'Simkura request failed') {
+  const data = err?.response?.data;
+  const parts = [];
+  if (typeof data?.message === 'string' && data.message) parts.push(data.message);
+  else if (typeof data?.error === 'string' && data.error) parts.push(data.error);
+  if (Array.isArray(data?.details) && data.details.length > 0) {
+    parts.push(data.details.join('; '));
+  }
+  return parts.join(' — ') || err?.message || fallback;
+}
+
 const RETRY = {
   maxAttempts:  parseInt(process.env.SIMKURA_RETRY_MAX_ATTEMPTS, 10)  || 3,
   baseDelayMs:  parseInt(process.env.SIMKURA_RETRY_BASE_DELAY_MS, 10) || 1000,
@@ -165,7 +183,7 @@ class SimkuraClient {
         ok: false,
         latency_ms: Date.now() - started,
         status: err.response?.status ?? null,
-        error:  err.response?.data?.error || err.message,
+        error:  upstreamErrorMessage(err),
       };
     }
   }
@@ -243,8 +261,9 @@ class SimkuraClient {
     return this._command('put', `/devices/${deviceId}/doors/${door}/lock-state`, { body: { state } });
   }
 
-  /** Door reader/latch config (lock.configure) — PATCH semantics, ≥1 of
-   *  { cardType, readerFrequency, latchInterval }. */
+  /** Door config (lock.configure) — PATCH semantics, ≥1 of { latchInterval,
+   *  readerTechnology }. latchInterval queues to the device; readerTechnology
+   *  is platform-recorded (202 with a cfg_… record already 'sent'). */
   configureDoor(deviceId, door, patch) {
     return this._command('patch', `/devices/${deviceId}/doors/${door}/config`, { body: patch });
   }
@@ -299,7 +318,8 @@ class SimkuraClient {
     return this._command('delete', `/devices/${deviceId}/doors/${door}/schedule`);
   }
 
-  /** device.configure — PATCH, currently { batteryType }. */
+  /** device.configure — PATCH, currently { batteryChemistry }
+   *  (platform-recorded; 202 with a cfg_… record already 'sent'). */
   configureDevice(deviceId, patch) {
     return this._command('patch', `/devices/${deviceId}/config`, { body: patch });
   }
@@ -388,3 +408,4 @@ const client = new SimkuraClient();
 module.exports = client;
 module.exports.SimkuraClient = SimkuraClient;
 module.exports.normalizeSpine = normalizeSpine; // exported for tests
+module.exports.upstreamErrorMessage = upstreamErrorMessage;

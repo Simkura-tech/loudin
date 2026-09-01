@@ -69,18 +69,21 @@
  */
 
 const { query } = require('../../database/db');
+const { upstreamErrorMessage } = require('../../hardware/simkura');
 
 const DOOR = 1; // single-door model — see header
 
 // Translate our credentials.credential_type ('pin' | 'HID' | 'mifare') into
-// the v2 credential-type enum. 'HID' is ambiguous between wiegand-26/hid-32
-// in our DB — we default to hid-32, the most common variant. Refine here
-// when finer-grained card types are surfaced.
+// the v2 card-format enum (v2 2.0.0 vocabulary: pin | 26-bit | mifare-1k |
+// hid-34 | hid-37). Our 'HID' rows map to hid-34 — the format the old
+// firmware mislabeled "32-bit" (upstream dropped the hid-32 slug for that
+// reason). Refine here when finer-grained formats are surfaced; a device's
+// accepted formats are published read-only as its v2 `cardFormats`.
 function mapCredentialType(ourType) {
   switch (ourType) {
     case 'pin':    return 'pin';
-    case 'HID':    return 'hid-32';
-    case 'mifare': return 'mifare-classic-1k';
+    case 'HID':    return 'hid-34';
+    case 'mifare': return 'mifare-1k';
     default:       return null;
   }
 }
@@ -207,7 +210,7 @@ function makeFire(sequence) {
       sequence.push({ command: label, status: 'ok', command_id: record?.id ?? null });
       return { ok: true, record };
     } catch (err) {
-      const detail = err.response?.data?.error || err.message || 'unknown';
+      const detail = upstreamErrorMessage(err, 'unknown');
       sequence.push({ command: label, status: 'failed', detail });
       return { ok: false, detail };
     }
