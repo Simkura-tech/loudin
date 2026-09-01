@@ -22,6 +22,8 @@ const ALLOWED_EVENT_TYPES = [
   'device.added',
   'device.removed',
   'device.offline_extended',
+  'device.battery_dead',      // relayed from Simkura health.battery_dead — lock in safe mode
+  'device.battery_recovered', // the matching all-clear
 ];
 
 const SECRET_BYTES = 24;

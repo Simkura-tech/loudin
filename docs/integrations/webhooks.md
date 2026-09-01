@@ -74,6 +74,8 @@ a failure and retried.
 | `device.added` | `device.device_id` | a device is claimed |
 | `device.removed` | `device.device_id` | a device is released |
 | `device.offline_extended` | `device.{ device_id, last_seen, offline_hours }` | a claimed device hasn't been seen for `SIMKURA_OFFLINE_ALERT_HOURS` (default 48) — once per offline episode |
+| `device.battery_dead` | `device.{ device_id, battery_percent? }` | a claimed device's battery died — the lock is in safe mode and **cannot actuate** (relayed from Simkura's `health.battery_dead`, once per episode) |
+| `device.battery_recovered` | `device.{ device_id, battery_percent? }` | the matching all-clear after a battery swap/recharge |
 
 Door/access (`device_events`) subscriptions are deferred (higher volume).
 

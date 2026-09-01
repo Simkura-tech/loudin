@@ -6,12 +6,17 @@
  * load-bearing: HMAC verification has to run against the exact bytes
  * Simkura signed, not a re-stringified parse.
  *
- * Doc reference: RECEIVING_DEVICE_EVENTS.md + WEBHOOKS.md at the repo root.
+ * Envelope (see docs.simkura.com/webhooks): { webhook_id, event_id,
+ * event_type, event_category, device_id, company_id, timestamp, data,
+ * metadata: { severity } } — plus `isTest: true` on synthetic test events
+ * fired from the Simkura dashboard (stored for the feed, but never allowed
+ * to mutate device state).
  */
 
 const express = require('express');
 const crypto  = require('crypto');
 const { query } = require('../database/db');
+const events  = require('../integrations/events');
 
 const router = express.Router();
 
@@ -143,6 +148,15 @@ async function resolveCredential(companyId, data) {
  * power_mode) so the device-detail UI reflects what just happened
  * without needing a separate refresh path.
  */
+const SEVERITIES = new Set(['info', 'warning', 'error']);
+
+/** v2 carries severity in metadata; tolerate the old top-level spot too,
+ *  and clamp anything outside the column's CHECK constraint to 'info'. */
+function eventSeverity(payload) {
+  const s = payload.metadata?.severity ?? payload.severity;
+  return SEVERITIES.has(s) ? s : 'info';
+}
+
 async function insertEvent(payload) {
   const companyId = await lookupCompanyId(payload.device_id);
   const { credentialId, personId } =
@@ -163,7 +177,7 @@ async function insertEvent(payload) {
       payload.device_id ?? null,
       payload.event_type,
       payload.event_category ?? null,
-      payload.severity ?? 'info',
+      eventSeverity(payload),
       payload.data     ?? {},
       payload.metadata ?? {},
       payload.event_id != null ? String(payload.event_id) : null,
@@ -175,28 +189,82 @@ async function insertEvent(payload) {
   );
 
   // Skip the device-row update on redelivered events — the device is
-  // already in whatever state the original delivery left it in.
-  if (result.rowCount === 0) return;
+  // already in whatever state the original delivery left it in. Synthetic
+  // test events (Simkura dashboard → Testing) go through the real pipeline
+  // and are stored for the feed, but must never mutate device state.
+  if (result.rowCount === 0 || payload.isTest === true) return;
 
-  await applyEventToDeviceState(payload);
+  await applyEventToDeviceState(payload, companyId);
+}
+
+/** Liveness bump: any device-originated event proves the device is up. */
+async function bumpLiveness(hwId, extraSets = '', params = []) {
+  await query(
+    `UPDATE devices
+        SET status     = 'online',
+            last_seen  = NOW(),
+            updated_at = NOW()${extraSets ? ', ' + extraSets : ''}
+      WHERE device_id = $1 AND deleted_at IS NULL`,
+    [hwId, ...params]
+  );
+}
+
+/**
+ * Relay a battery-health transition to Loudin's own outbound webhooks so
+ * external systems (ops tooling, a CRM) can act on it. Claimed devices
+ * only — an unclaimed pool device has no tenant to alert about. Simkura
+ * fires each threshold crossing once (with an all-clear counterpart), so
+ * relaying 1:1 needs no episode tracking on our side.
+ */
+async function emitBatteryTransition(type, hwId, companyId, batteryPct) {
+  if (!companyId) return;
+  try {
+    const { rows: [co] } = await query(
+      `SELECT company_type, parent_company_id FROM companies WHERE id = $1`,
+      [companyId]
+    );
+    if (!co) return;
+    void events.emit(type, {
+      company:  { id: companyId, type: co.company_type },
+      reseller: co.parent_company_id ? { company_id: co.parent_company_id } : undefined,
+      device:   {
+        device_id: hwId,
+        ...(Number.isFinite(batteryPct) ? { battery_percent: batteryPct } : {}),
+      },
+    });
+  } catch (err) {
+    console.error('[webhooks/simkura] battery transition emit failed:', err.message);
+  }
 }
 
 /**
  * Mirror an event onto the `devices` row's live-state columns.
  *
- * Per INTEGRATION_REST.md the event taxonomy is:
- *   lock.state_changed     â†’ door_state (from data.lockState or numeric data.state)
- *   device.wake            â†’ power_mode='active'
- *   device.sleep           â†’ power_mode='sleep'
- *   device.restart         â†’ bumps last_seen / status only
- *   access.granted/denied  â†’ bumps last_seen / status only
- *   command.sent           â†’ bumps last_seen / status only (device confirmed)
- *   command.failed         â†’ no device mutation (it's a queue/Simkura issue)
+ * Per the v2 event catalog (docs.simkura.com/webhooks):
+ *   lock.state_changed         → door_state (from data.lockState or numeric data.state)
+ *   device.wake                → power_mode='active'
+ *   device.sleep               → power_mode='sleep'
+ *   device.online              → status='online' (platform-derived reachability edge)
+ *   device.offline             → status='offline' ONLY — the one event that is
+ *                                NOT a liveness signal; last_seen untouched so
+ *                                the offline-alert sweep still measures staleness
+ *   device.reconnect/restart   → liveness bump
+ *   access.granted/denied      → liveness bump (guaranteed events — persisted
+ *                                on-device, delivered on next check-in)
+ *   command.sent               → liveness bump (device confirmed)
+ *   command.failed             → no device mutation (queue/Simkura issue)
+ *   health.battery_low/dead/
+ *     recovered                → battery_health ('low'/'dead'/'ok') + batteryPct
+ *                                when carried; dead/recovered also relay to
+ *                                Loudin's outbound webhooks
+ *   health.reader_wedged/
+ *     recovery_boot            → liveness bump (stored; alarm shows in the feed)
+ *   device.deployed/undeployed → stored only (platform billing transitions)
  *
- * Every branch that updates also sets status='online' + last_seen=NOW(),
- * because receiving any event from the device is itself a liveness signal.
+ * Every device-originated branch also sets status='online' + last_seen=NOW(),
+ * because receiving the event is itself a liveness signal.
  */
-async function applyEventToDeviceState(payload) {
+async function applyEventToDeviceState(payload, companyId = null) {
   const hwId = payload.device_id;
   if (!hwId) return;
   const data = payload.data || {};
@@ -206,27 +274,11 @@ async function applyEventToDeviceState(payload) {
       const numericMap = { 0: 'locked', 1: 'unlocked', 2: 'lockdown' };
       const newState = data.lockState || numericMap[data.state];
       if (!['locked', 'unlocked', 'lockdown'].includes(newState)) return;
-      await query(
-        `UPDATE devices
-            SET door_state = $1,
-                status     = 'online',
-                last_seen  = NOW(),
-                updated_at = NOW()
-          WHERE device_id = $2 AND deleted_at IS NULL`,
-        [newState, hwId]
-      );
+      await bumpLiveness(hwId, 'door_state = $2', [newState]);
       return;
     }
     case 'device.wake':
-      await query(
-        `UPDATE devices
-            SET power_mode = 'active',
-                status     = 'online',
-                last_seen  = NOW(),
-                updated_at = NOW()
-          WHERE device_id = $1 AND deleted_at IS NULL`,
-        [hwId]
-      );
+      await bumpLiveness(hwId, `power_mode = 'active'`);
       return;
     case 'device.sleep':
       await query(
@@ -238,18 +290,49 @@ async function applyEventToDeviceState(payload) {
         [hwId]
       );
       return;
-    case 'device.restart':
-    case 'command.sent':
-    case 'access.granted':
-    case 'access.denied':
+    case 'device.online':
+      await bumpLiveness(hwId);
+      return;
+    case 'device.offline':
+      // Platform-derived: the device went quiet. Do NOT touch last_seen.
       await query(
         `UPDATE devices
-            SET status     = 'online',
-                last_seen  = NOW(),
+            SET status     = 'offline',
                 updated_at = NOW()
           WHERE device_id = $1 AND deleted_at IS NULL`,
         [hwId]
       );
+      return;
+    case 'health.battery_low':
+    case 'health.battery_dead':
+    case 'health.battery_recovered': {
+      const health = payload.event_type === 'health.battery_low'  ? 'low'
+                   : payload.event_type === 'health.battery_dead' ? 'dead'
+                   :                                                'ok';
+      const pct = Number(data.batteryPct);
+      const sets = ['battery_health = $2'];
+      const params = [health];
+      if (data.batteryPct != null && Number.isFinite(pct)) {
+        params.push(Math.max(0, Math.min(100, Math.round(pct))));
+        sets.push(`battery_percent = $${params.length + 1}`);
+      }
+      await bumpLiveness(hwId, sets.join(', '), params);
+      if (payload.event_type !== 'health.battery_low') {
+        await emitBatteryTransition(
+          health === 'dead' ? 'device.battery_dead' : 'device.battery_recovered',
+          hwId, companyId, pct
+        );
+      }
+      return;
+    }
+    case 'device.reconnect':
+    case 'device.restart':
+    case 'command.sent':
+    case 'access.granted':
+    case 'access.denied':
+    case 'health.reader_wedged':
+    case 'health.recovery_boot':
+      await bumpLiveness(hwId);
       return;
     default:
       return;
@@ -289,3 +372,4 @@ router.post('/simkura', async (req, res) => {
 });
 
 module.exports = router;
+module.exports._internal = { insertEvent, applyEventToDeviceState, eventSeverity, verifySignature }; // for tests

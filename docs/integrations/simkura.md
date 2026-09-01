@@ -92,9 +92,14 @@ activity feed can show *who* opened the door.
 | `lock.state_changed` | Updates `door_state` (`locked`/`unlocked`/`lockdown`), marks online |
 | `device.wake` | `power_mode='active'`, marks online |
 | `device.sleep` | `power_mode='sleep'` |
-| `device.restart`, `access.granted`, `access.denied`, `command.sent` | Liveness bump (`last_seen`) |
-| `command.failed` | Stored only — treated as a queue problem, not device state |
+| `device.online` / `device.offline` | Platform-derived reachability edges → `status` (offline deliberately does **not** touch `last_seen`, so the offline-alert sweep still measures true staleness) |
+| `health.battery_low` / `battery_dead` / `battery_recovered` | Updates `battery_health` (+ `battery_percent` when carried); dead/recovered also relay to Loudin's [outbound webhooks](./webhooks.md) as `device.battery_dead` / `device.battery_recovered` |
+| `device.reconnect`, `device.restart`, `access.granted`, `access.denied`, `command.sent`, `health.reader_wedged`, `health.recovery_boot` | Liveness bump (`last_seen`) |
+| `command.failed`, `device.deployed` / `undeployed` | Stored only — no device mutation |
 | anything else | Stored for the event feed; no device mutation (new Simkura event types need no migration) |
+
+Synthetic test events (fired from the Simkura dashboard, marked
+`isTest: true`) are stored for the feed but never mutate device state.
 
 **Registering the receiver**: `node apps/api/scripts/register-webhook.js`
 (idempotent; needs `SIMKURA_WEBHOOK_PUBLIC_URL`; `--regenerate` rotates the
