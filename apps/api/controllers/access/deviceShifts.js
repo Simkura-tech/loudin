@@ -9,11 +9,10 @@
  * row. Sharing across devices is supported by the schema but not
  * exposed yet.
  *
- * TODO (simkura-push): on create / update / delete we should send
- * bwShift + bwDoorSched to the device so the firmware actually obeys
- * the schedule. Wiring that requires confirming whether the firmware
- * treats shifts as auto-unlock windows or credential-active windows.
- * Until then this controller is storage-only.
+ * This controller is storage-only by design: changes reach the lock via
+ * the explicit "Update device" push (services/access/devicePush.js), which
+ * rebuilds the device's shift table wholesale (shifts.add / schedule.set —
+ * firmware has no per-shift delete).
  */
 
 const { query, getClient } = require('../../database/db');

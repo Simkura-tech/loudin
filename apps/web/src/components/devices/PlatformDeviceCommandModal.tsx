@@ -3,9 +3,10 @@
  * fleet view. Lets a platform admin fire a small set of safe diagnostics
  * against any device, claimed or unclaimed.
  *
- * Backend enforces the whitelist (bwUnlock / bwState / bwReset / bwCount /
- * bwProvision); we only expose the three that make sense without a
- * full provisioning context.
+ * Backend enforces the whitelist (lock.unlock / lock.set-state /
+ * lock.configure / device.reboot); we only expose the two that make sense
+ * without a full provisioning context. (v1's inventory request is gone in
+ * v2 — record counts arrive with every state sync.)
  */
 
 import { useState } from 'react';
@@ -14,7 +15,6 @@ import {
   IconAlertTriangle,
   IconLockOpen,
   IconPower,
-  IconReportAnalytics,
   IconX,
 } from '@tabler/icons-react';
 import { devicesApi, type PlatformDevice } from '../../services/access/devices';
@@ -203,20 +203,11 @@ export function PlatformDeviceCommandModal({ device, onClose, onCommandSent }: P
             <PrimaryButton
               type="button"
               disabled={!!pending}
-              onClick={() => fire('bwUnlock')}
+              onClick={() => fire('lock.unlock')}
             >
               <IconLockOpen size={16} />
-              {pending === 'bwUnlock' ? 'Unlocking…' : 'Momentary unlock'}
+              {pending === 'lock.unlock' ? 'Unlocking…' : 'Momentary unlock'}
             </PrimaryButton>
-
-            <SecondaryButton
-              type="button"
-              disabled={!!pending}
-              onClick={() => fire('bwCount')}
-            >
-              <IconReportAnalytics size={16} />
-              {pending === 'bwCount' ? 'Requesting…' : 'Request inventory'}
-            </SecondaryButton>
 
             <SecondaryButton
               type="button"
@@ -241,7 +232,7 @@ export function PlatformDeviceCommandModal({ device, onClose, onCommandSent }: P
                   <SecondaryButton
                     type="button"
                     $variant="danger"
-                    onClick={() => { setConfirmReboot(false); fire('bwReset'); }}
+                    onClick={() => { setConfirmReboot(false); fire('device.reboot'); }}
                   >
                     Reboot
                   </SecondaryButton>
@@ -263,9 +254,8 @@ export function PlatformDeviceCommandModal({ device, onClose, onCommandSent }: P
 }
 
 function label(command: string): string {
-  if (command === 'bwUnlock') return 'Momentary unlock';
-  if (command === 'bwReset')  return 'Reboot';
-  if (command === 'bwCount')  return 'Inventory request';
+  if (command === 'lock.unlock')   return 'Momentary unlock';
+  if (command === 'device.reboot') return 'Reboot';
   return command;
 }
 

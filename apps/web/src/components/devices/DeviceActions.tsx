@@ -1,16 +1,16 @@
 /**
  * DeviceActions — admin command surface on DeviceDetailPage.
  *
- * Buttons forward to Simkura. The set is whitelisted server-side
- * (bwUnlock / bwState / bwReset / bwCount / bwProvision) so the UI only
- * renders what the backend will accept.
+ * Buttons forward to Simkura's v2 API. The set is whitelisted server-side
+ * (lock.unlock / lock.set-state / lock.configure / device.reboot) so the UI
+ * only renders what the backend will accept.
  *
  * Layout:
- *   • Momentary unlock — bwUnlock, big primary button (the killer feature)
- *   • Unlock / Locked toggle — bwState, reads device.door_state to decide
- *     which side of the toggle is "active"
- *   • Reboot — bwReset, confirm-gated
- *   • Provisioning — opens a modal that fires bwProvision (cardType +
+ *   • Momentary unlock — lock.unlock, big primary button (the killer feature)
+ *   • Unlock / Locked toggle — lock.set-state, reads device.door_state to
+ *     decide which side of the toggle is "active"
+ *   • Reboot — device.reboot, confirm-gated
+ *   • Provisioning — opens a modal that fires lock.configure (cardType +
  *     latchInterval)
  *   • Re-sync — POST /api/devices/:id/push { force: true }: wipes the lock
  *     and re-pushes the full credential/schedule state from the platform.
@@ -281,10 +281,10 @@ const Select = styled.select`
 
 // ── Constants ────────────────────────────────────────────────────────────────
 
-const CARD_TYPES: { value: number; label: string }[] = [
-  { value: 0, label: '26-bit Wiegand (default)' },
-  { value: 1, label: '32-bit HID' },
-  { value: 2, label: 'MIFARE Classic 1k' },
+const CARD_TYPES: { value: string; label: string }[] = [
+  { value: 'wiegand-26',        label: '26-bit Wiegand (default)' },
+  { value: 'hid-32',            label: '32-bit HID' },
+  { value: 'mifare-classic-1k', label: 'MIFARE Classic 1k' },
 ];
 
 interface ConfirmState {
@@ -299,7 +299,7 @@ interface ConfirmState {
 }
 
 interface ProvisioningForm {
-  cardType: number;
+  cardType: string;
   latchInterval: number;
 }
 
@@ -323,7 +323,7 @@ export function DeviceActions({ device, onCommandSent, onDeviceChanged }: Props)
   // Provisioning modal state
   const [provOpen, setProvOpen]     = useState(false);
   const [provForm, setProvForm]     = useState<ProvisioningForm>({
-    cardType: 0,
+    cardType: 'wiegand-26',
     latchInterval: 5,
   });
   const [provSaving, setProvSaving] = useState(false);
@@ -402,7 +402,7 @@ export function DeviceActions({ device, onCommandSent, onDeviceChanged }: Props)
 
   const openProvisioning = () => {
     setProvForm({
-      cardType: 0,
+      cardType: 'wiegand-26',
       latchInterval: 5,
     });
     setProvError(null);
@@ -414,7 +414,7 @@ export function DeviceActions({ device, onCommandSent, onDeviceChanged }: Props)
     setProvSaving(true);
     setProvError(null);
     try {
-      await devicesApi.sendCommand(device.device_id, 'bwProvision', {
+      await devicesApi.sendCommand(device.device_id, 'lock.configure', {
         cardType: provForm.cardType,
         latchInterval: provForm.latchInterval,
       });
@@ -437,10 +437,10 @@ export function DeviceActions({ device, onCommandSent, onDeviceChanged }: Props)
           <PrimaryButton
             type="button"
             disabled={!!pending}
-            onClick={() => fire('bwUnlock')}
+            onClick={() => fire('lock.unlock')}
           >
             <IconLockOpen size={18} strokeWidth={2} />
-            {pending === 'bwUnlock' ? 'Unlocking…' : 'Momentary unlock'}
+            {pending === 'lock.unlock' ? 'Unlocking…' : 'Momentary unlock'}
           </PrimaryButton>
 
           {/* Persistent door-state toggle */}
@@ -449,20 +449,20 @@ export function DeviceActions({ device, onCommandSent, onDeviceChanged }: Props)
               type="button"
               $active={heldUnlocked}
               disabled={!!pending || heldUnlocked}
-              onClick={() => fire('bwState', { state: 'unlocked' })}
+              onClick={() => fire('lock.set-state', { state: 'unlocked' })}
               title="Hold the door unlocked until manually changed"
             >
               <IconLockOpen size={14} strokeWidth={2} />
               Unlock
             </ToggleSide>
-            {/* 'normal' (3) clears the hold-unlocked override and hands the
-                door back to its schedule — NOT 'locked' (0), which would pin
+            {/* 'normal' clears the hold-unlocked override and hands the
+                door back to its schedule — NOT 'locked', which would pin
                 the door locked and suppress shift-driven auto-unlock. */}
             <ToggleSide
               type="button"
               $active={!heldUnlocked}
               disabled={!!pending || !heldUnlocked}
-              onClick={() => fire('bwState', { state: 'normal' })}
+              onClick={() => fire('lock.set-state', { state: 'normal' })}
               title="Return the door to normal operation — locked, following its schedule"
             >
               <IconLock size={14} strokeWidth={2} />
@@ -474,7 +474,7 @@ export function DeviceActions({ device, onCommandSent, onDeviceChanged }: Props)
             type="button"
             disabled={!!pending}
             onClick={() => setConfirm({
-              command: 'bwReset',
+              command: 'device.reboot',
               title: `Reboot ${device.device_name}?`,
               body: 'The device will reset within a few seconds. The door stays locked during the reboot.',
               confirmLabel: 'Reboot',
@@ -580,7 +580,7 @@ export function DeviceActions({ device, onCommandSent, onDeviceChanged }: Props)
                   <FieldLabel>Card reader type</FieldLabel>
                   <Select
                     value={provForm.cardType}
-                    onChange={(e) => setProvForm({ ...provForm, cardType: Number(e.target.value) })}
+                    onChange={(e) => setProvForm({ ...provForm, cardType: e.target.value })}
                   >
                     {CARD_TYPES.map((t) => (
                       <option key={t.value} value={t.value}>{t.label}</option>
@@ -631,11 +631,10 @@ export function DeviceActions({ device, onCommandSent, onDeviceChanged }: Props)
 }
 
 function commandLabel(command: string, payload?: Record<string, unknown>): string {
-  if (command === 'bwUnlock')    return 'Momentary unlock';
-  if (command === 'bwReset')     return 'Reboot';
-  if (command === 'bwCount')     return 'Inventory request';
-  if (command === 'bwProvision') return 'Provisioning';
-  if (command === 'bwState') {
+  if (command === 'lock.unlock')    return 'Momentary unlock';
+  if (command === 'device.reboot')  return 'Reboot';
+  if (command === 'lock.configure') return 'Provisioning';
+  if (command === 'lock.set-state') {
     const s = payload?.state as string | undefined;
     if (s === 'locked')   return 'Lock';
     if (s === 'unlocked') return 'Hold unlocked';

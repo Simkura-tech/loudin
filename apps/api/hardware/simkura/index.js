@@ -3,7 +3,7 @@
  *
  * Usage (default singleton, uses SIMKURA_API_URL / SIMKURA_API_KEY):
  *   const simkura = require('./hardware/simkura');
- *   await simkura.client.publishCommand(hardwareDeviceId, 'bwUnlock', {});
+ *   await simkura.client.unlockDoor(hardwareDeviceId);
  *
  * Usage (per-reseller credentials):
  *   const { SimkuraClient } = require('./hardware/simkura');

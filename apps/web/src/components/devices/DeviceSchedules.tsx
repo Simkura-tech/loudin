@@ -5,9 +5,9 @@
  * Storage is the company-scoped `shifts` table joined to the device via
  * `device_shifts`; the UI presents one row per assignment.
  *
- * Note: the firmware push (bwShift + bwDoorSched) is not yet wired in the
- * backend — see deviceShifts.js for the TODO. From the user's perspective
- * a saved schedule is recorded but not yet enforced on the lock.
+ * Changes reach the lock via the explicit "Update device" push
+ * (shifts.add / schedule.set) — a saved schedule is recorded immediately
+ * and enforced on the lock after the next push.
  */
 
 import { useCallback, useEffect, useState } from 'react';

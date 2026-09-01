@@ -149,24 +149,23 @@ export const API_CATALOG: ApiEndpoint[] = [
       device: { hardware_device_id: '5042394b-3538-4587-80f6-252a16c75848',
                 device_name: 'Front Door', location: 'Main entrance',
                 status: 'online', door_state: 'locked', door_override: false,
-                battery_percent: 87, power_mode: 'deep_sleep',
-                deep_sleep_duration_s: 3600,
-                carrier: 'AT&T', signal_strength: -85, osdp_stage: 3,
-                fw_counts: { credentials: 9, shifts: 2, holidays: 0, door_shifts: 1 },
-                config_card_type: 1, latch_interval_s: 5,
-                firmware_version: '1.4.2', last_seen: '2026-05-17T19:42:08Z',
+                battery_percent: 87, battery_health: 'ok', power_mode: 'deep_sleep',
+                carrier: 'AT&T', signal_strength: -85,
+                fw_counts: { credentials: 9, shifts: 2, holidays: 0 },
+                latch_interval_s: 5,
+                firmware_version: '2.3.4', last_seen: '2026-05-17T19:42:08Z',
                 state_synced_at: '2026-05-17T19:40:00Z',
                 company_id: 88, company_name: 'Demo Customer Co' },
       sync: { has_pending: false, credentials: { add: 0, remove: 0, total: 9 },
               shifts: { add: 0, remove: 0, total: 2 } },
     },
     notes:
-      'door_override true means the door is pinned by a bwState command and its ' +
+      'door_override true means the door is pinned by a lock.set-state command and its ' +
       'schedule is suspended. fw_counts are record counts as reported by the ' +
       'firmware itself (device-side truth); state_synced_at is when that snapshot ' +
-      'was last refreshed. osdp_stage is the card-reader link (0=Root … 3=Connected). ' +
-      'config_card_type: 0=26-bit Wiegand, 1=32-bit HID, 2=Mifare 1k. ' +
-      'All richer-state fields are null until the device first reports them.',
+      'was last refreshed. battery_health \'dead\' means the lock is in safe mode ' +
+      'and cannot actuate. All richer-state fields are null until the device ' +
+      'first reports them.',
   },
 
   // ── support (planned, both read and write) ─────────────────────────────────
@@ -190,7 +189,7 @@ export const API_CATALOG: ApiEndpoint[] = [
     ],
     responseExample: {
       ticket: { id: 1247, status: 'open', priority: 'normal',
-                subject: 'Door lock not responding to bwUnlock',
+                subject: 'Door lock not responding to unlock commands',
                 external_ref: 'CRM-T-99182',
                 created_at: '2026-05-17T20:42:00Z' },
     },
@@ -214,7 +213,7 @@ export const API_CATALOG: ApiEndpoint[] = [
     responseExample: {
       tickets: [
         { id: 1247, status: 'open', priority: 'normal',
-          subject: 'Door lock not responding to bwUnlock',
+          subject: 'Door lock not responding to unlock commands',
           external_ref: 'CRM-T-99182',
           created_at: '2026-05-17T20:42:00Z',
           updated_at: '2026-05-17T20:42:00Z' },
@@ -234,8 +233,8 @@ export const API_CATALOG: ApiEndpoint[] = [
     ],
     responseExample: {
       ticket: { id: 1247, status: 'open', priority: 'normal',
-                subject: 'Door lock not responding to bwUnlock',
-                body:    'Front door at Demo Customer Co stopped reacting to bwUnlock at 18:30.',
+                subject: 'Door lock not responding to unlock commands',
+                body:    'Front door at Demo Customer Co stopped reacting to unlock commands at 18:30.',
                 external_ref: 'CRM-T-99182',
                 company_id: 88, company_name: 'Demo Customer Co',
                 created_at: '2026-05-17T20:42:00Z',

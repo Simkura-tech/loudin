@@ -10,10 +10,10 @@ connects to a device directly. Three channels:
 
 Integration code lives in [`apps/api/hardware/simkura/`](../../apps/api/hardware/simkura/).
 
-> **Status note:** Simkura's API is mid-transition from v1 (legacy, frozen)
-> to v2 (resource-style — see [docs.simkura.com](https://docs.simkura.com)).
-> Loudin's **reads run on v2**; **commands and webhook management remain on
-> v1** until Simkura's v2 command surface leaves draft, then migrate too.
+> **Status note:** Loudin speaks Simkura **v2** (resource-style — see
+> [docs.simkura.com](https://docs.simkura.com)) for reads AND commands.
+> Only webhook management remains on v1 paths (`/v2/webhooks` is not
+> drafted yet upstream).
 
 ---
 
@@ -51,18 +51,22 @@ paths below.
 
 ## Outbound REST calls
 
-Reads use v2, commands and webhook management still v1:
+Reads and commands use v2; webhook management stays on v1:
 
 | Method & path | Used for |
 |---|---|
 | `GET /api/v2/devices?limit&page` | Fleet list (paginated ×100 internally) — each item is the device "spine" (`meta`, `device`, `capabilities`); also the reachability probe |
 | `GET /api/v2/devices/:id` | Full device resource **with state embedded** (v2 has no separate `/state` endpoint): per-door lock state and counts, power/battery, connectivity, firmware |
-| `POST /api/v1/devices/:id/commands` | Enqueue a `bw*` command — **asynchronous**: 200 means accepted by Simkura, not delivered to the device. Migrates to v2's resource-style command endpoints when they leave draft |
-| `GET /api/v1/devices/:id/queue` | The device's pending/processing command queue (Simkura-owned) |
+| `POST/PUT/PATCH/DELETE /api/v2/devices/:id/doors/1/…` and `/api/v2/devices/:id/{config,reboot}` | The v2 resource-style commands (unlock, lock-state, door/device config, credentials, shifts, holidays, schedule) — all **asynchronous**: 202 returns a queued-command record (`cmd_…`), delivery happens on the device's next wake |
+| `GET /api/v2/devices/:id/commands` | Command records — without a status filter this is the active queue (queued + sending) |
 | `GET/POST/PUT/DELETE /api/v1/webhooks…` | Webhook registration management, plus `/test`, `/regenerate-secret`, `/deliveries` (`/v2/webhooks` is not drafted yet) |
 
 Commands are queued by Simkura and delivered when the device wakes — a
-sleeping lock holds its queue until its next check-in.
+sleeping lock holds its queue until its next check-in. Queue semantics:
+singleton command types (unlock, lock-state, config, reboot) keep only the
+newest pending instance per device; data records (credentials, shifts,
+holidays, schedule) always stack — which is why Loudin pre-flights pushes
+(below) rather than blindly re-queueing.
 
 ## Inbound webhooks
 
@@ -147,12 +151,15 @@ Attaching credentials or shifts to a device only marks intent in the
 database; the push to hardware is an explicit action (**Update device** in
 the UI, `POST /api/devices/:id/push`).
 
-- **Delta push** (default) — sends only what changed: `bwCredDeactivate`
-  for each removed credential, `bwCred` for each new one, and — because
-  firmware has no per-shift delete — a wholesale schedule rebuild
-  (`bwClear` → `bw_shift_clear` → `bwShift` ×N → `bwDoorSched`) only when
-  a shift changed.
-- **Force rebuild** (`{force: true}`) — wipes and re-sends everything.
+- **Delta push** (default) — sends only what changed: `credentials.remove`
+  for each detached credential (PINs via `?type=pin`), `credentials.add`
+  for each new one, and — because firmware has no per-shift delete — a
+  wholesale schedule rebuild (`schedule.clear` → `shifts.clear` →
+  `shifts.add` ×N → `schedule.set`) only when a shift changed. Shifts are
+  pushed on firmware slot ids (1..N, assigned per push) — database ids
+  never reach the device.
+- **Force rebuild** (`{force: true}`) — wipes everything (including any
+  drifted holiday records) and re-sends the full active state.
 - **Clear** (`POST /api/devices/:id/clear`) — removes all credentials and
   schedules from the device; the claim survives.
 
@@ -170,19 +177,18 @@ device). The device's own firmware-reported counts
 verifying what a lock actually holds.
 
 Ad-hoc commands (`POST /api/devices/:hardware_id/commands`) accept an
-allowlisted subset: `bwUnlock`, `bwState` (lock / unlock / lockdown /
-`normal` to clear an override), `bwProvision` (card type, latch interval),
-`bwReset`, `bwCount`, and the credential/schedule commands the push
-orchestrator uses.
+allowlisted subset: `lock.unlock`, `lock.set-state` (locked / unlocked /
+lockdown / `normal` to clear an override), `lock.configure` (card type,
+reader frequency, latch interval), and `device.reboot`. Data-record
+commands are reserved for the push orchestrator. (v1's inventory request
+is gone — record counts arrive with every state sync.)
 
 ## Current limitations
 
-- **Commands still speak v1** (`bw*` vocabulary) while Simkura's v2 command
-  surface is in draft. The public sandbox key is read-only, so lock commands
-  require a real `sk_live_…` key until then.
-- **Holidays** are modeled in the database and counted by firmware, but are
-  not yet pushed to devices (v2's `holidays.add` will lift this with the
-  command migration).
+- **Holidays** are modeled in the database and counted by firmware; rebuild
+  and clear operations wipe them on the device (`holidays.clear`), but
+  pushing holidays (`holidays.add`) lands together with the device-holiday
+  assignment feature.
 - **Multi-door devices**: v2 models `doors[]` as first-class; Loudin
   currently mirrors door 1 only.
 - **Per-reseller Simkura accounts**: the schema (`companies.simkura_api_key`

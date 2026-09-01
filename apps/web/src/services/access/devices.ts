@@ -60,9 +60,9 @@ export interface Device {
  *
  * Per-junction counts (credentials + shifts):
  *   add       — active rows that haven't been submitted to the firmware yet
- *   submitted — pushed to Simkura, awaiting device-side confirmation
- *               (NB: today Simkura only fires command.sent for bwUnlock /
- *                bwProvision, so for cred/shift this is the terminal state)
+ *   submitted — accepted by Simkura (202), awaiting device confirmation
+ *               (NB: v2 doesn't correlate device acks to command records
+ *                yet, so for cred/shift this is the terminal state)
  *   remove    — soft-deleted rows still cached on the firmware
  *   total     — active rows in the junction
  *
@@ -175,16 +175,17 @@ export interface EventsParams {
 /**
  * A command still in flight to the lock, from simkura-core's per-device
  * queue (GET /api/devices/:id/queue proxies it — the app stores nothing).
- * 'pending' rows sit until a sleeping device's next wake; an empty queue
- * means the lock has everything we've sent.
+ * 'queued' rows sit until a sleeping device's next wake; an empty queue
+ * means the lock has everything we've sent. command_type carries the v2
+ * operation name (e.g. 'lock.unlock', 'credentials.add').
  */
 export interface QueuedCommand {
   id: number | string;
   command_type: string;
-  status: 'pending' | 'processing';
+  status: 'queued' | 'sending';
   attempts: number;
-  max_attempts: number | null;
   created_at: string | null;
+  expires_at: string | null;
   error_message: string | null;
 }
 
@@ -219,12 +220,15 @@ export const devicesApi = {
     api.get<QueueResponse, QueueResponse>(`/api/devices/${id}/queue`),
 
   /**
-   * Forward a command to the device via Simkura.
-   * Whitelisted server-side: bwUnlock | bwState | bwReset | bwCount | bwProvision.
-   * bwState requires payload.state ∈ {'locked','unlocked','lockdown','normal'} —
-   * 'normal' (3) clears the override and returns the door to its schedule;
+   * Forward a command to the device via Simkura's v2 API.
+   * Whitelisted server-side: lock.unlock | lock.set-state | lock.configure |
+   * device.reboot.
+   * lock.set-state requires payload.state ∈ {'locked','unlocked','lockdown','normal'}
+   * — 'normal' clears the override and returns the door to its schedule;
    * the other values pin the door in that state until changed.
-   * bwProvision accepts payload.cardType (0|1|2) + payload.latchInterval (1–255).
+   * lock.configure accepts ≥1 of payload.cardType
+   * ('wiegand-26'|'hid-32'|'mifare-classic-1k'), payload.readerFrequency
+   * ('prox'|'smartCard'|'nfc'|'ble'), payload.latchInterval (1–255 s).
    *
    * @param hwId Hardware device_id (unique at the source). Platform admins
    *   can target devices not yet claimed by any tenant.
@@ -237,9 +241,9 @@ export const devicesApi = {
 
   /**
    * Push the device's pending credential + shift changes to the firmware.
-   * By default the server sends a delta — bwCredDeactivate for removals,
-   * bwCred for new attachments, and a shifts-only rebuild when any schedule
-   * changed (the firmware has no per-shift delete). With force:true it
+   * By default the server sends a delta — credentials.remove for removals,
+   * credentials.add for new attachments, and a shifts-only rebuild when any
+   * schedule changed (the firmware has no per-shift delete). With force:true it
    * instead wipes the lock and re-pushes the full active state (also
    * skipping the queued-rebuild pre-flight) — the escape hatch for a lock
    * that has drifted from the DB.

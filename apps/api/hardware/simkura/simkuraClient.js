@@ -5,9 +5,8 @@
  *   - Device reads       (v2: GET /api/v2/devices, GET /api/v2/devices/:id —
  *                         state is embedded in the resource; there is no
  *                         separate /state endpoint in v2)
- *   - Device commands    (still v1: POST /api/v1/devices/:hwId/commands —
- *                         migrates to the v2 resource-style command endpoints
- *                         once the v2 command surface leaves draft)
+ *   - Device commands    (v2 resource-style endpoints — one method per
+ *                         operation, all async 202 + queued-command record)
  *   - Webhook management (v1 CRUD + test + secret rotation + deliveries;
  *                         /v2/webhooks is not drafted yet)
  *
@@ -18,7 +17,7 @@
  *
  * Use the singleton (env-var credentials) for the default case:
  *   const simkura = require('./hardware/simkura');
- *   await simkura.client.publishCommand(hwId, 'bwUnlock', {});
+ *   await simkura.client.unlockDoor(hwId);
  *
  * Or instantiate per-reseller:
  *   const { SimkuraClient } = require('./hardware/simkura');
@@ -224,42 +223,115 @@ class SimkuraClient {
   }
 
   // ──────────────────────────────────────────────────────────────────────
-  // Commands  (POST /api/v1/devices/:hardwareDeviceId/commands)
+  // Commands — v2 resource-style. Every command endpoint is async: a 202
+  // returns a queued-command record { id: 'cmd_…', operation, door, status,
+  // createdAt, expiresAt } and the outcome arrives later (command.sent /
+  // command.failed webhooks, or polling the record).
+  //
+  // Queue semantics (per the v2 spec): singleton types (unlock, lock-state,
+  // config, reboot, factory-reset) keep only the NEWEST pending instance
+  // per device; data records (credentials/shifts/holidays/schedule) always
+  // stack — hence devicePush's pre-flight check before a rebuild.
   // ──────────────────────────────────────────────────────────────────────
 
-  /**
-   * Send a command. Simkura responds asynchronously via webhook — this
-   * call returns once the command is accepted by Simkura.
-   */
-  async publishCommand(hardwareDeviceId, command, payload = {}) {
-    const r = await this.client.post(
-      `${API_V1}/devices/${hardwareDeviceId}/commands`,
-      { command, payload },
-    );
+  /** Internal: fire one v2 command request and return the 202 record. */
+  async _command(method, path, { body, params } = {}) {
+    const r = await this.client.request({ method, url: `${API_V2}${path}`, data: body, params });
     return r.data;
   }
 
+  /** Momentary unlock (lock.unlock) — re-locks after the door's latchInterval. */
+  unlockDoor(deviceId, door = 1) {
+    return this._command('post', `/devices/${deviceId}/doors/${door}/unlock`, { body: {} });
+  }
+
+  /** Persistent lock state (lock.set-state): locked | unlocked | lockdown |
+   *  normal ('normal' clears a cloud override — door returns to schedule). */
+  setLockState(deviceId, door, state) {
+    return this._command('put', `/devices/${deviceId}/doors/${door}/lock-state`, { body: { state } });
+  }
+
+  /** Door reader/latch config (lock.configure) — PATCH semantics, ≥1 of
+   *  { cardType, readerFrequency, latchInterval }. */
+  configureDoor(deviceId, door, patch) {
+    return this._command('patch', `/devices/${deviceId}/doors/${door}/config`, { body: patch });
+  }
+
+  /** credentials.add — { type, cardNumber?, facilityCode?, pinCode?, class? }. */
+  addCredential(deviceId, door, body) {
+    return this._command('post', `/devices/${deviceId}/doors/${door}/credentials`, { body });
+  }
+
+  /** credentials.remove — credentialId is the card number, or the PIN code
+   *  with opts.type = 'pin'. opts.facilityCode applies to card types only. */
+  removeCredential(deviceId, door, credentialId, opts = {}) {
+    return this._command('delete', `/devices/${deviceId}/doors/${door}/credentials/${credentialId}`, {
+      params: {
+        ...(opts.type ? { type: opts.type } : {}),
+        ...(opts.facilityCode != null ? { facilityCode: opts.facilityCode } : {}),
+      },
+    });
+  }
+
+  clearCredentials(deviceId, door = 1) {
+    return this._command('delete', `/devices/${deviceId}/doors/${door}/credentials`, { params: { confirm: 'all' } });
+  }
+
+  /** shifts.add — { shiftId (1–255 firmware slot), start, end, days, type }. */
+  addShift(deviceId, door, body) {
+    return this._command('post', `/devices/${deviceId}/doors/${door}/shifts`, { body });
+  }
+
+  clearShifts(deviceId, door = 1) {
+    return this._command('delete', `/devices/${deviceId}/doors/${door}/shifts`, { params: { confirm: 'all' } });
+  }
+
+  /** holidays.add — { holidayId (1–255), start, end (ISO), behavior }. */
+  addHoliday(deviceId, door, body) {
+    return this._command('post', `/devices/${deviceId}/doors/${door}/holidays`, { body });
+  }
+
+  clearHolidays(deviceId, door = 1) {
+    return this._command('delete', `/devices/${deviceId}/doors/${door}/holidays`, { params: { confirm: 'all' } });
+  }
+
+  /** schedule.set — replaces the door's shift binding. shiftIds must be
+   *  non-empty and reference shifts already defined on the device. */
+  setDoorSchedule(deviceId, door, shiftIds) {
+    return this._command('put', `/devices/${deviceId}/doors/${door}/schedule`, { body: { shiftIds } });
+  }
+
+  /** schedule.clear — unbind the door schedule (also the documented first
+   *  step before wiping shifts the schedule references). */
+  clearDoorSchedule(deviceId, door = 1) {
+    return this._command('delete', `/devices/${deviceId}/doors/${door}/schedule`);
+  }
+
+  /** device.configure — PATCH, currently { batteryType }. */
+  configureDevice(deviceId, patch) {
+    return this._command('patch', `/devices/${deviceId}/config`, { body: patch });
+  }
+
+  /** device.reboot — soft reboot, preserves data. */
+  rebootDevice(deviceId) {
+    return this._command('post', `/devices/${deviceId}/reboot`, { body: {} });
+  }
+
   /**
-   * List a device's recent command-queue rows from Simkura.
-   *
-   * Each row: { id, device_id, command_type, payload, priority,
-   *   status: 'pending'|'processing'|'sent'|'failed'|'cancelled',
-   *   attempts, max_attempts, sent_at, error_message, created_at, ... }
-   *
-   * Sleeping devices hold 'pending' rows until their next wake, so this is
-   * the pre-flight check before a provisioning push: pending rebuild
-   * commands mean a previous push hasn't reached the device yet.
-   *
-   * @param {string} hardwareDeviceId
-   * @param {Object} [params] - { since: ISO timestamp, limit }
-   * @returns {Promise<Array>} queue rows (newest first)
+   * List a device's command records. Without `status` this is the ACTIVE
+   * queue (queued + sending, delivery order); with a status (or 'all') it's
+   * history, newest first. Rows are QueuedCommandDetail:
+   *   { id, operation, door, status, createdAt, expiresAt, sentAt, attempts, error }
    */
-  async getDeviceQueue(hardwareDeviceId, params = {}) {
-    const r = await this.client.get(
-      `${API_V1}/devices/${hardwareDeviceId}/queue`,
-      { params },
-    );
+  async listCommands(deviceId, params = {}) {
+    const r = await this.client.get(`${API_V2}/devices/${deviceId}/commands`, { params });
     return r.data?.commands ?? [];
+  }
+
+  /** One command record by id (accepts the `cmd_` prefix). */
+  async getCommand(deviceId, commandId) {
+    const r = await this.client.get(`${API_V2}/devices/${deviceId}/commands/${commandId}`);
+    return r.data;
   }
 
   // ──────────────────────────────────────────────────────────────────────

@@ -4,7 +4,7 @@
  * Reads /api/devices/:id/queue, which proxies simkura-core's per-device
  * command queue. The queue lives in simkura-core (the device gateway), NOT
  * in this app — the app stores nothing; every load asks Simkura what's still
- * undelivered. Sleeping locks hold 'pending' rows until their next wake, so
+ * undelivered. Sleeping locks hold 'queued' rows until their next wake, so
  * this tab is the answer to "did my change reach the door yet?": an empty
  * queue means the lock is up to date with everything we've sent.
  */
@@ -93,8 +93,8 @@ const StatusChip = styled.span<{ $status: QueuedCommand['status'] }>`
   font-size: 11px;
   font-weight: 600;
   letter-spacing: 0.02em;
-  background: ${({ $status }) => ($status === 'processing' ? '#dbeafe' : '#fef3c7')};
-  color:      ${({ $status }) => ($status === 'processing' ? '#1e40af' : '#92400e')};
+  background: ${({ $status }) => ($status === 'sending' ? '#dbeafe' : '#fef3c7')};
+  color:      ${({ $status }) => ($status === 'sending' ? '#1e40af' : '#92400e')};
 `;
 
 const UpToDate = styled.div`
@@ -139,20 +139,24 @@ const Skeleton = styled.div`
   &:last-child { border-bottom: none; }
 `;
 
-// Friendly labels for Simkura queue command types. Unknown types fall back
+// Friendly labels for Simkura v2 operations. Unknown types fall back
 // to the raw name so new commands still render.
 const COMMAND_LABEL: Record<string, string> = {
-  bwUnlock:         'Unlock door',
-  bwState:          'Set door state',
-  bwReset:          'Reboot',
-  bwCount:          'Inventory check',
-  bwProvision:      'Provisioning update',
-  bwCred:           'Install credential',
-  bwCredDeactivate: 'Remove credential',
-  bw_cred_clear:    'Clear all credentials',
-  bwShift:          'Install schedule',
-  bw_shift_clear:   'Clear all schedules',
-  bwDoorSched:      'Apply door schedule',
+  'lock.unlock':          'Unlock door',
+  'lock.set-state':       'Set door state',
+  'lock.configure':       'Door configuration',
+  'device.reboot':        'Reboot',
+  'device.configure':     'Device configuration',
+  'device.factory-reset': 'Factory reset',
+  'credentials.add':      'Install credential',
+  'credentials.remove':   'Remove credential',
+  'credentials.clear':    'Clear all credentials',
+  'shifts.add':           'Install schedule',
+  'shifts.clear':         'Clear all schedules',
+  'holidays.add':         'Install holiday',
+  'holidays.clear':       'Clear all holidays',
+  'schedule.set':         'Apply door schedule',
+  'schedule.clear':       'Unbind door schedule',
 };
 
 function commandLabel(type: string): string {
@@ -222,17 +226,17 @@ export function DeviceCommandQueue({ deviceId, powerMode, refreshKey = 0 }: Prop
           {queue.map((c) => (
             <Row key={c.id}>
               <span className="crest">
-                {c.status === 'processing' ? <IconSend size={15} /> : <IconClockPause size={15} />}
+                {c.status === 'sending' ? <IconSend size={15} /> : <IconClockPause size={15} />}
               </span>
               <div>
                 <div className="title">{commandLabel(c.command_type)}</div>
                 <div className="meta">
                   {c.created_at ? `Queued ${relativeTime(c.created_at)}` : 'Queued'}
-                  {c.attempts > 1 && ` · attempt ${c.attempts}${c.max_attempts ? ` of ${c.max_attempts}` : ''}`}
+                  {c.attempts > 1 && ` · attempt ${c.attempts}`}
                 </div>
               </div>
               <StatusChip $status={c.status}>
-                {c.status === 'processing' ? 'Sending' : 'Waiting for device'}
+                {c.status === 'sending' ? 'Sending' : 'Waiting for device'}
               </StatusChip>
             </Row>
           ))}

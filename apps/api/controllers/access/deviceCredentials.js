@@ -190,7 +190,7 @@ async function attach(req, res, next) {
 // ── DELETE /api/devices/:id/credentials/:credId ───────────────────────────────
 // Never-synced rows are hard-deleted (firmware never knew about them — no
 // deactivate needed). Synced rows are soft-deleted so the next "Update
-// device" push knows to fire bwCredDeactivate.
+// device" push knows to fire credentials.remove.
 async function detach(req, res, next) {
   try {
     const device = await loadDeviceForCaller(req);

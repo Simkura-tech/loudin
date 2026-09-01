@@ -4,15 +4,20 @@
  * A flat, declarative list of preset test commands. Each row is one named
  * action with a matching button; the payload is fixed per row so testing is
  * one click. Every command maps to the backend allowlist
- * (apps/api/controllers/access/deviceCommands.js → ALLOWED_COMMANDS).
+ * (apps/api/controllers/access/deviceCommands.js → ALLOWED_COMMANDS):
+ * the four v2 operations lock.unlock / lock.set-state / lock.configure /
+ * device.reboot.
  *
- * Commands forward to Simkura immediately; the device acts on its next
- * check-in and reports back via webhook. We show the synchronous ack here.
+ * Commands forward to Simkura immediately (202 = queued); the device acts
+ * on its next check-in and reports back via webhook. We show the queued-
+ * command record here.
  *
- * NOTE: credentials are master-only in this platform (bwCred is forced to
- * cardClass:1 server-side). The "8–5 shift" PIN currently sends the same
- * master bwCred as the plain PIN — the shift + bwDoorSched binding is a
- * later bite. See [[feedback-credentials-master-only]].
+ * Data-record commands (credentials/shifts/holidays) are deliberately NOT
+ * on this bench — raw test pushes desync the lock from the DB. Exercise
+ * them through the real flow instead: attach a credential or schedule to
+ * the device and press "Update device" (the push orchestrator).
+ * (v1's inventory-request button is gone with v2 — record counts arrive
+ * with every state sync.)
  */
 
 import { useState, type ReactNode } from 'react';
@@ -21,12 +26,8 @@ import {
   IconLockOpen,
   IconLock,
   IconShieldLock,
-  IconReportAnalytics,
   IconPower,
-  IconKey,
-  IconClock,
-  IconCalendarBolt,
-  IconTrash,
+  IconAdjustments,
   IconAlertTriangle,
   IconAlertOctagon,
   IconSend,
@@ -61,88 +62,39 @@ const GROUPS: Group[] = [
     items: [
       {
         id: 'unlock', label: 'Unlock door', description: 'Momentary unlock — relocks after the latch interval.',
-        command: 'bwUnlock', icon: <IconLockOpen size={18} />, buttonText: 'Unlock', variant: 'primary',
+        command: 'lock.unlock', icon: <IconLockOpen size={18} />, buttonText: 'Unlock', variant: 'primary',
       },
       {
-        // 'normal' (3) clears any hold-open/lockdown override and returns the
-        // door to schedule-driven operation. 'locked' (0) would pin the door
+        // 'normal' clears any hold-open/lockdown override and returns the
+        // door to schedule-driven operation. 'locked' would pin the door
         // locked and suppress shift-driven auto-unlock.
         id: 'lock', label: 'Lock door', description: 'Return to normal operation — locked, following the door schedule.',
-        command: 'bwState', payload: { state: 'normal' }, icon: <IconLock size={18} />, buttonText: 'Lock',
+        command: 'lock.set-state', payload: { state: 'normal' }, icon: <IconLock size={18} />, buttonText: 'Lock',
       },
       {
         id: 'unlock-hold', label: 'Unlock & hold', description: 'Hold the door unlocked until changed.',
-        command: 'bwState', payload: { state: 'unlocked' }, icon: <IconLockOpen size={18} />, buttonText: 'Hold open',
+        command: 'lock.set-state', payload: { state: 'unlocked' }, icon: <IconLockOpen size={18} />, buttonText: 'Hold open',
       },
       {
         id: 'lockdown', label: 'Lockdown', description: 'No credential opens the door until cleared.',
-        command: 'bwState', payload: { state: 'lockdown' }, icon: <IconShieldLock size={18} />,
+        command: 'lock.set-state', payload: { state: 'lockdown' }, icon: <IconShieldLock size={18} />,
         buttonText: 'Lockdown', variant: 'danger', confirm: 'Put this device into lockdown?',
       },
     ],
   },
   {
-    title: 'Diagnostics',
+    title: 'Configuration & diagnostics',
     items: [
       {
-        id: 'inventory', label: 'Request inventory', description: 'Ask the device to dump its credential/shift counts.',
-        command: 'bwCount', icon: <IconReportAnalytics size={18} />, buttonText: 'Request',
+        id: 'latch-5s', label: 'Set latch interval to 5s',
+        description: 'Door holds unlatched for 5 seconds on momentary unlock.',
+        command: 'lock.configure', payload: { latchInterval: 5 },
+        icon: <IconAdjustments size={18} />, buttonText: 'Set',
       },
       {
         id: 'reboot', label: 'Reboot device', description: 'Soft reboot. The door stays locked during restart.',
-        command: 'bwReset', icon: <IconPower size={18} />, buttonText: 'Reboot',
+        command: 'device.reboot', icon: <IconPower size={18} />, buttonText: 'Reboot',
         variant: 'danger', confirm: 'Reboot this device now?',
-      },
-    ],
-  },
-  {
-    title: 'Credentials',
-    items: [
-      {
-        id: 'pin-shift', label: 'Add PIN 12345 — 8–5 shift',
-        description: 'PIN credential 12345 (master). Pair with "Add 8–5 shift" + "Bind shift to door" below to time-gate it.',
-        command: 'bwCred', payload: { credentialType: 'pin', pinCode: 12345, cardClass: 1 },
-        icon: <IconClock size={18} />, buttonText: 'Add',
-      },
-      {
-        id: 'pin-master', label: 'Add PIN 12345 — master',
-        description: 'PIN credential 12345 as a master (works any time).',
-        command: 'bwCred', payload: { credentialType: 'pin', pinCode: 12345, cardClass: 1 },
-        icon: <IconKey size={18} />, buttonText: 'Add',
-      },
-      {
-        id: 'cred-clear', label: 'Clear all credentials', description: 'Wipe every credential stored on the device.',
-        command: 'bw_cred_clear', icon: <IconTrash size={18} />, buttonText: 'Clear',
-        variant: 'danger', confirm: 'Wipe ALL credentials on this device?',
-      },
-    ],
-  },
-  {
-    title: 'Shifts',
-    items: [
-      {
-        id: 'shift-add', label: 'Add 8–5 shift (Mon–Fri)',
-        description: 'Define an 08:00–17:00 weekday shift (id 1) on the device.',
-        command: 'bwShift',
-        payload: {
-          shiftId: 1,
-          startHour: 8, startMinute: 0, startSecond: 0,
-          endHour: 17, endMinute: 0, endSecond: 0,
-          daysOfWeek: ['monday', 'tuesday', 'wednesday', 'thursday', 'friday'],
-          scheduleType: 'normal',
-        },
-        icon: <IconClock size={18} />, buttonText: 'Add',
-      },
-      {
-        id: 'shift-bind', label: 'Bind 8–5 shift to door',
-        description: 'Bind shift id 1 as the door schedule so access is time-gated to the shift.',
-        command: 'bwDoorSched', payload: { scheduleIds: [1] },
-        icon: <IconCalendarBolt size={18} />, buttonText: 'Bind',
-      },
-      {
-        id: 'shift-clear', label: 'Clear all shifts', description: 'Wipe every shift definition on the device.',
-        command: 'bw_shift_clear', icon: <IconTrash size={18} />, buttonText: 'Clear',
-        variant: 'danger', confirm: 'Wipe ALL shifts on this device?',
       },
     ],
   },

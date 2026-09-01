@@ -1,59 +1,55 @@
 /**
- * Device push orchestrator.
+ * Device push orchestrator (Simkura v2 command surface).
  *
  * “Update device” walks the per-device junction tables (device_credentials,
  * device_shifts) and pushes the firmware into line with our DB by firing a
- * sequence of bw* commands at Simkura.
+ * sequence of v2 resource-style commands at Simkura. All commands are async
+ * (202 + queued-command record); sleeping devices hold their queue until
+ * they wake.
  *
- * Before firing, a pre-flight check asks Simkura's command queue
- * (GET /devices/:hwId/queue) whether a previous rebuild is still pending —
- * sleeping devices hold commands until they wake, and Simkura deliberately
- * never dedupes the data-record commands, so re-pushing would double-queue
- * the rebuild. Blocked pushes return { blocked: true }; pass force:true to
- * override.
+ * Doors: Loudin models devices as single-door — every command targets door 1.
+ *
+ * Pre-flight: data-record commands (credentials/shifts/holidays/schedule)
+ * always STACK in Simkura's queue — only singleton types (unlock, lock-state,
+ * config, reboot) are deduped server-side. So before a push we check the
+ * device's active queue for a rebuild still in flight and refuse to
+ * double-queue. Blocked pushes return { blocked: true }; force:true overrides.
  *
  * Two modes:
  *
- * DELTA (default) — the firmware only knows "add credential" and "delete
- * credential", so we send exactly the pending changes:
+ * DELTA (default) — send exactly the pending changes:
+ *   1. credentials.remove × N — one per soft-deleted junction row (PIN rows
+ *      via ?type=pin); the row is hard-deleted once the command is accepted
+ *   2. credentials.add × N — one per active row not yet submitted
+ *   3. (only if any shift changed — single-shift removal is unsupported by
+ *       firmware, so shift changes rebuild the shift table wholesale)
+ *      schedule.clear   — unbind first; firmware refuses to wipe shifts the
+ *                         door schedule still references
+ *      shifts.clear
+ *      shifts.add × N   — every active shift
+ *      schedule.set     — skipped if no shifts remain (empty binding is
+ *                         undefined firmware behaviour; no shifts = door
+ *                         runs credentials-only, the correct default)
  *
- *   1. bwCredDeactivate × N   — one per soft-deleted junction row; the row
- *                               is hard-deleted once the command lands
- *   2. bwCred × N             — one per active row not yet submitted
- *   3. (only if any shift changed — there is no per-shift delete command,
- *       so shift changes rebuild the shift table wholesale)
- *      bwClear { clearType: “schedules” }   — unbind first; some firmware
- *                                             refuses to wipe referenced shifts
- *      bw_shift_clear
- *      bwShift × N                          — every active shift
- *      bwDoorSched { scheduleIds: [...] }   — skipped if no shifts remain
+ * REBUILD (force:true) — wipe everything and re-push the full active state:
+ *   schedule.clear → credentials.clear → shifts.clear → holidays.clear →
+ *   credentials.add × N → shifts.add × N → schedule.set
+ *   (holidays.clear wipes drifted/legacy holiday records; holiday *push*
+ *   lands with the device-holiday attach feature — the junction has no
+ *   delta lifecycle columns yet)
  *
- * REBUILD (force:true) — wipe everything and re-push the full active state.
- * The escape hatch for a lock whose contents have drifted from the DB:
- *
- *   1. bwClear { clearType: “schedules” }
- *   2. bw_cred_clear                          (credentials before shifts — spec order)
- *   3. bw_shift_clear
- *   4. bwCred  × N
- *   5. bwShift × N
- *   6. bwDoorSched { scheduleIds: [...] }     (skipped if no shifts)
- *
- * NB the three wipes are deliberately three DISTINCT command types.
- * Simkura-core dedupes queued commands by command_type (payload ignored),
- * so bwClear × 3 with different clearTypes collapses into one queue row on
- * a sleeping device. bwClear is only ever used for the schedules unbind;
- * credentials and shifts wipe via their dedicated bw_cred_clear /
- * bw_shift_clear commands.
- *
- * Either way, soft-deleted junction rows are hard-deleted once the firmware
- * no longer holds them (deactivated in delta mode; wiped in rebuild mode).
+ * Firmware shift slots: v2 validates shiftId as 1–255, but our shifts.id is
+ * an unbounded serial. Shift pushes are always wholesale (clear + re-add),
+ * so we assign slot numbers 1..N in push order and bind the schedule to the
+ * same slots — DB ids never reach the firmware.
  *
  * Stamping model (see migration 058):
  *   * applied_at    set when the junction row was created/updated
- *   * submitted_at  STAMPED HERE on Simkura 200 ACK for the corresponding command
- *   * synced_at     STAMPED HERE alongside submitted_at — Simkura's 200 ACK
- *                   is the best confirmation available for bwCred/bwShift
- *                   (command.sent only fires for bwUnlock/bwProvision)
+ *   * submitted_at  STAMPED HERE on Simkura's 202 (command queued)
+ *   * synced_at     STAMPED HERE alongside submitted_at — v2 does not yet
+ *                   correlate device-level acknowledgement to command
+ *                   records (an 'acknowledged' status is planned upstream);
+ *                   until then the 202 is the best confirmation available
  *
  * No transaction: each Simkura call is an independent HTTP round trip and
  * cannot be rolled back. On failure we stop the sequence, keep whatever
@@ -61,40 +57,38 @@
  * success report. The next pushAll call picks up from there.
  *
  * Per memory feedback-credentials-master-only:
- *   bwCred is forced to cardClass:1 and never includes shiftIds. The door
- *   schedule (bwDoorSched) is what gates time-based access, not per-credential
- *   shift assignments.
+ *   credentials are pushed with class:'master' and never carry shiftIds.
+ *   The door schedule (schedule.set) is what gates time-based access, not
+ *   per-credential shift assignments.
  */
 
 const { query } = require('../../database/db');
 
+const DOOR = 1; // single-door model — see header
+
 // Translate our credentials.credential_type ('pin' | 'HID' | 'mifare') into
-// Simkura's credentialType taxonomy ('pin' | '26bit' | '32bit' | '34bit' |
-// 'mifare_classic_1k'). 'HID' is ambiguous between 26bit/32bit/34bit in our
-// DB — we default to 32bit which is the most common HID variant. Refine
-// here when finer-grained card types are surfaced.
+// the v2 credential-type enum. 'HID' is ambiguous between wiegand-26/hid-32
+// in our DB — we default to hid-32, the most common variant. Refine here
+// when finer-grained card types are surfaced.
 function mapCredentialType(ourType) {
   switch (ourType) {
     case 'pin':    return 'pin';
-    case 'HID':    return '32bit';
-    case 'mifare': return 'mifare_classic_1k';
+    case 'HID':    return 'hid-32';
+    case 'mifare': return 'mifare-classic-1k';
     default:       return null;
   }
 }
 
-// Build the bwCred payload for a single credential row. Returns null if
-// the row can't be mapped to a valid payload (missing required fields,
-// unknown type, etc.) — caller should skip those.
-function bwCredPayload(cred) {
-  const credentialType = mapCredentialType(cred.credential_type);
-  if (!credentialType) return null;
+// Build the credentials.add body for one credential row. Returns null if
+// the row can't be mapped (missing required fields, unknown type) — caller
+// should skip those.
+function credentialAddBody(cred) {
+  const type = mapCredentialType(cred.credential_type);
+  if (!type) return null;
 
-  const base = {
-    credentialType,
-    cardClass: 1,   // master-only per feedback-credentials-master-only
-  };
+  const base = { type, class: 'master' }; // master-only per memory note above
 
-  if (credentialType === 'pin') {
+  if (type === 'pin') {
     const pin = parseInt(cred.credential_value, 10);
     if (!Number.isFinite(pin)) return null;
     return { ...base, pinCode: pin };
@@ -108,73 +102,69 @@ function bwCredPayload(cred) {
   return { ...base, cardNumber, facilityCode };
 }
 
-// Build the bwCredDeactivate payload. The spec shape is exactly
-// { cardNumber, facilityCode } — no credentialType/cardClass. The lock has
-// no record ids; PIN credentials are identified by their PIN value in the
-// cardNumber field (facilityCode 0). Returns null for unmappable rows.
-// TBD (simkura-spec): the PIN may need to be hex-encoded rather than the
-// decimal value — pending confirmation against the firmware.
-function bwCredDeactivatePayload(cred) {
+// Arguments for credentials.remove: the path id is the card number, or the
+// PIN code itself with ?type=pin (per the v2 spec). Returns null for
+// unmappable rows.
+function credentialRemoveArgs(cred) {
   if (cred.credential_type === 'pin') {
     const pin = parseInt(cred.credential_value, 10);
     if (!Number.isFinite(pin)) return null;
-    return { cardNumber: pin, facilityCode: 0 };
+    return { credentialId: pin, opts: { type: 'pin' } };
   }
   const cardNumber = parseInt(cred.card_number, 10);
   if (!Number.isFinite(cardNumber)) return null;
   const facilityCode = cred.facility_code != null
     ? parseInt(cred.facility_code, 10) || 0
     : 0;
-  return { cardNumber, facilityCode };
+  return { credentialId: cardNumber, opts: { facilityCode } };
 }
 
-// Translate days_of_week (JSONB array of 0-6 with 0=Sunday) to Simkura's
-// string-day list. Simkura accepts numbers (1=Monday … 7=Sunday) OR strings;
-// we use strings for readability in command history.
+// days_of_week is JSONB 0–6 with 0=Sunday; v2 wants full lowercase day names.
 const DAY_NAMES = ['sunday', 'monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday'];
-function bwShiftPayload(shift) {
-  const [sH, sM, sS] = String(shift.start_time).split(':').map((n) => parseInt(n, 10) || 0);
-  const [eH, eM, eS] = String(shift.end_time).split(':').map((n) => parseInt(n, 10) || 0);
+
+/** 'H:M:S'-ish → strict 'HH:MM:SS' (v2 validates the pattern). */
+function hhmmss(t) {
+  const [h = 0, m = 0, s = 0] = String(t).split(':').map((n) => parseInt(n, 10) || 0);
+  return [h, m, s].map((n) => String(n).padStart(2, '0')).join(':');
+}
+
+// Build the shifts.add body. `slot` is the 1-based firmware slot assigned
+// for this push (NOT the DB id — see header).
+function shiftAddBody(shift, slot) {
   let days = shift.days_of_week;
   if (typeof days === 'string') {
     try { days = JSON.parse(days); } catch { days = []; }
   }
-  const daysOfWeek = Array.isArray(days)
-    ? days.map((d) => DAY_NAMES[d]).filter(Boolean)
-    : [];
   return {
-    shiftId: shift.id,
-    startHour: sH, startMinute: sM, startSecond: sS,
-    endHour:   eH, endMinute:   eM, endSecond:   eS,
-    daysOfWeek,
-    scheduleType: 'normal',
+    shiftId: slot,
+    start:   hhmmss(shift.start_time),
+    end:     hhmmss(shift.end_time),
+    days:    Array.isArray(days) ? days.map((d) => DAY_NAMES[d]).filter(Boolean) : [],
+    type:    'normal',
   };
 }
 
-// The command types a rebuild is made of. A pending/processing row of any
-// of these in Simkura's queue means a previous push is still waiting for
-// the device to wake. Simkura intentionally never dedupes the data-record
-// types (bwCred/bwShift/bwDoorSched — each row is a distinct record), so
-// pushing again while one is in flight double-queues the whole rebuild.
-const REBUILD_COMMAND_TYPES = new Set([
-  'bwClear', 'bw_cred_clear', 'bw_shift_clear',
-  'bwCred', 'bwCredDeactivate', 'bwShift', 'bwDoorSched',
+// Operations that make up a rebuild. Any of these queued/sending on the
+// device means a previous push hasn't reached it yet — data records stack,
+// so pushing again would double-queue the rebuild.
+const REBUILD_OPERATIONS = new Set([
+  'credentials.add', 'credentials.remove', 'credentials.clear',
+  'shifts.add', 'shifts.clear',
+  'holidays.add', 'holidays.clear',
+  'schedule.set', 'schedule.clear',
 ]);
-const IN_FLIGHT_STATUSES    = new Set(['pending', 'processing']);
 
 /**
- * Pre-flight check: rebuild commands still sitting in Simkura's queue for
- * this device. Fail-open — if the queue endpoint is unreachable (older
- * Simkura deploy, transient error) we return [] and let the push proceed,
- * since blocking pushes on a visibility feature would be worse than the
- * duplicate risk it mitigates.
+ * Pre-flight check: rebuild commands still in the device's active queue
+ * (listCommands without a status filter returns exactly queued + sending).
+ * Fail-open — if the queue endpoint is unreachable we return [] and let the
+ * push proceed, since blocking pushes on a visibility feature would be worse
+ * than the duplicate risk it mitigates.
  */
 async function getInFlightRebuild(simkura, hwId) {
   try {
-    const commands = await simkura.getDeviceQueue(hwId, { limit: 100 });
-    return commands.filter(
-      (c) => REBUILD_COMMAND_TYPES.has(c.command_type) && IN_FLIGHT_STATUSES.has(c.status)
-    );
+    const commands = await simkura.listCommands(hwId, { limit: 100 });
+    return commands.filter((c) => REBUILD_OPERATIONS.has(c.operation));
   } catch (err) {
     console.warn('[devicePush] queue pre-flight check failed for', hwId, '—', err.message);
     return [];
@@ -200,18 +190,19 @@ async function loadDevice(deviceId) {
 }
 
 /**
- * Helper: fire one command at Simkura, appending to `sequence`. Returns
- * { ok, detail }; caller decides whether to continue after a failure.
+ * Helper: run one v2 command call, appending to `sequence`. `label` is the
+ * catalog operation name; `call` is a thunk invoking the client method.
+ * Returns { ok, detail }; caller decides whether to continue after failure.
  */
-function makeFire(simkura, hwId, sequence) {
-  return async function fire(command, payload) {
+function makeFire(sequence) {
+  return async function fire(label, call) {
     try {
-      await simkura.publishCommand(hwId, command, payload);
-      sequence.push({ command, status: 'ok' });
-      return { ok: true };
+      const record = await call();
+      sequence.push({ command: label, status: 'ok', command_id: record?.id ?? null });
+      return { ok: true, record };
     } catch (err) {
       const detail = err.response?.data?.error || err.message || 'unknown';
-      sequence.push({ command, status: 'failed', detail });
+      sequence.push({ command: label, status: 'failed', detail });
       return { ok: false, detail };
     }
   };
@@ -248,7 +239,7 @@ async function stampSubmitted(table, junctionIds) {
  *   ok: boolean,
  *   hwId: string,
  *   mode: 'delta'|'rebuild',
- *   sequence: Array<{ command: string, status: 'ok'|'failed'|'skipped', detail?: string }>,
+ *   sequence: Array<{ command: string, status: 'ok'|'failed'|'skipped', command_id?: string, detail?: string }>,
  *   noop?: boolean,
  *   blocked?: boolean,
  *   queued?: number,
@@ -262,10 +253,6 @@ async function pushAll({ deviceId, simkura, force = false }) {
   const sequence = [];
   const mode = force ? 'rebuild' : 'delta';
 
-  // Pre-flight: don't stack a second push on top of one that's still queued
-  // (sleeping device). Simkura's retry handles delivery — our job is just
-  // not to double-queue. `force` overrides for the "device is stuck, push
-  // anyway" case.
   if (!force) {
     const inFlight = await getInFlightRebuild(simkura, hwId);
     if (inFlight.length > 0) {
@@ -284,16 +271,16 @@ async function pushAll({ deviceId, simkura, force = false }) {
     }
   }
 
-  const fire = makeFire(simkura, hwId, sequence);
+  const fire = makeFire(sequence);
 
   return force
-    ? rebuild({ deviceId, hwId, sequence, fire })
-    : delta({ deviceId, hwId, sequence, fire });
+    ? rebuild({ deviceId, hwId, sequence, fire, simkura })
+    : delta({ deviceId, hwId, sequence, fire, simkura });
 }
 
 // ── Delta mode ────────────────────────────────────────────────────────────────
 
-async function delta({ deviceId, hwId, sequence, fire }) {
+async function delta({ deviceId, hwId, sequence, fire, simkura }) {
   // "Pending add" mirrors the sync-summary predicate in
   // controllers/access/devices.js get() — keep the two in lockstep so a
   // push always drives the banner counts to zero.
@@ -314,7 +301,7 @@ async function delta({ deviceId, hwId, sequence, fire }) {
         [deviceId]
       ),
       // LEFT JOIN: the credential row itself may have been deleted after the
-      // detach — we still need its data to tell the lock what to deactivate.
+      // detach — we still need its data to tell the lock what to remove.
       query(
         `SELECT dc.id AS junction_id,
                 c.id, c.credential_type, c.credential_value,
@@ -344,26 +331,27 @@ async function delta({ deviceId, hwId, sequence, fire }) {
     return { ok: true, hwId, mode: 'delta', sequence, noop: true };
   }
 
-  // 1. Deactivate removed credentials first — frees table slots on the lock
-  // before we add. Each row is hard-deleted once its deactivate lands (the
+  // 1. Remove detached credentials first — frees table slots on the lock
+  // before we add. Each row is hard-deleted once its remove is accepted (the
   // deletes are batched below but survive a mid-sequence failure).
   const removedJunctions = [];
   let removeFailure = null;
   for (const c of credRemovals) {
-    const payload = bwCredDeactivatePayload(c);
-    if (!payload) {
+    const args = credentialRemoveArgs(c);
+    if (!args) {
       // Unmappable rows were skipped at add time too, so the lock almost
       // certainly never held them — settle the bookkeeping. If it somehow
       // does, a force rebuild wipes it.
       sequence.push({
-        command: 'bwCredDeactivate',
+        command: 'credentials.remove',
         status:  'skipped',
         detail:  `credential ${c.id ?? `(junction ${c.junction_id})`}: unmappable — run a full re-sync if the lock still holds it`,
       });
       removedJunctions.push(c.junction_id);
       continue;
     }
-    const r = await fire('bwCredDeactivate', payload);
+    const r = await fire('credentials.remove', () =>
+      simkura.removeCredential(hwId, DOOR, args.credentialId, args.opts));
     if (!r.ok) { removeFailure = r.detail; break; }
     removedJunctions.push(c.junction_id);
   }
@@ -376,31 +364,31 @@ async function delta({ deviceId, hwId, sequence, fire }) {
   if (removeFailure) return { ok: false, hwId, mode: 'delta', sequence, error: removeFailure };
 
   // 2. Push new credentials. Stamp incrementally-collected successes even on
-  // a mid-sequence failure — re-sending an already-delivered bwCred would
+  // a mid-sequence failure — re-sending an already-queued add would
   // duplicate the record on the lock (firmware has no upsert).
   const submittedCreds = [];
   let addFailure = null;
   for (const c of credAdds) {
-    const payload = bwCredPayload(c);
-    if (!payload) {
-      sequence.push({ command: 'bwCred', status: 'skipped', detail: `credential ${c.id}: unmappable` });
+    const body = credentialAddBody(c);
+    if (!body) {
+      sequence.push({ command: 'credentials.add', status: 'skipped', detail: `credential ${c.id}: unmappable` });
       continue;
     }
-    const r = await fire('bwCred', payload);
+    const r = await fire('credentials.add', () => simkura.addCredential(hwId, DOOR, body));
     if (!r.ok) { addFailure = r.detail; break; }
     submittedCreds.push(c.junction_id);
   }
   await stampSubmitted('device_credentials', submittedCreds);
   if (addFailure) return { ok: false, hwId, mode: 'delta', sequence, error: addFailure };
 
-  // 3. Shifts: no per-shift delete command exists, so any shift change
-  // rebuilds the lock's shift table wholesale.
+  // 3. Shifts: single-shift removal is unsupported by firmware, so any shift
+  // change rebuilds the lock's shift table wholesale.
   if (shiftsDirty) {
-    // Unbind the door schedule first — some firmware versions refuse to
-    // wipe shift definitions while the door schedule still references them.
-    const r1 = await fire('bwClear', { clearType: 'schedules' });
+    // Unbind the door schedule first — firmware refuses to wipe shift
+    // definitions the door schedule still references.
+    const r1 = await fire('schedule.clear', () => simkura.clearDoorSchedule(hwId, DOOR));
     if (!r1.ok) return { ok: false, hwId, mode: 'delta', sequence, error: r1.detail };
-    const r2 = await fire('bw_shift_clear');
+    const r2 = await fire('shifts.clear', () => simkura.clearShifts(hwId, DOOR));
     if (!r2.ok) return { ok: false, hwId, mode: 'delta', sequence, error: r2.detail };
 
     // The wipe just removed the soft-deleted shifts from the lock — settle
@@ -411,23 +399,23 @@ async function delta({ deviceId, hwId, sequence, fire }) {
     );
 
     const submittedShiftJunctions = [];
-    const submittedShiftIds = [];
+    const slots = [];
     let shiftFailure = null;
-    for (const s of activeShifts) {
-      const r = await fire('bwShift', bwShiftPayload(s));
+    for (const [idx, s] of activeShifts.entries()) {
+      const slot = idx + 1; // firmware slot, not DB id — see header
+      const r = await fire('shifts.add', () => simkura.addShift(hwId, DOOR, shiftAddBody(s, slot)));
       if (!r.ok) { shiftFailure = r.detail; break; }
       submittedShiftJunctions.push(s.junction_id);
-      submittedShiftIds.push(s.id);
+      slots.push(slot);
     }
     await stampSubmitted('device_shifts', submittedShiftJunctions);
     if (shiftFailure) return { ok: false, hwId, mode: 'delta', sequence, error: shiftFailure };
 
-    // Re-bind shifts to the door. Only sent when there are shifts — the spec
-    // requires at least one scheduleId and firmware behaviour with an empty
-    // array is undefined. With no shifts the door runs open-access
-    // (credentials only, no time gating), which is the correct default.
-    if (submittedShiftIds.length > 0) {
-      const r3 = await fire('bwDoorSched', { scheduleIds: submittedShiftIds });
+    // Re-bind shifts to the door — same slots we just defined. Only sent
+    // when there are shifts: an empty binding is undefined firmware
+    // behaviour, and no shifts = door runs credentials-only (correct default).
+    if (slots.length > 0) {
+      const r3 = await fire('schedule.set', () => simkura.setDoorSchedule(hwId, DOOR, slots));
       if (!r3.ok) return { ok: false, hwId, mode: 'delta', sequence, error: r3.detail };
     }
   }
@@ -437,7 +425,7 @@ async function delta({ deviceId, hwId, sequence, fire }) {
 
 // ── Rebuild mode (force) ──────────────────────────────────────────────────────
 
-async function rebuild({ deviceId, hwId, sequence, fire }) {
+async function rebuild({ deviceId, hwId, sequence, fire, simkura }) {
   const [{ rows: creds }, { rows: shifts }] = await Promise.all([
     query(
       `SELECT dc.id AS junction_id,
@@ -454,20 +442,23 @@ async function rebuild({ deviceId, hwId, sequence, fire }) {
     query(ACTIVE_SHIFTS_SQL, [deviceId]),
   ]);
 
-  // 1. Clear the door-schedule binding first. This must come before clearing
-  // shifts — some firmware versions refuse to wipe shift definitions while
-  // the door schedule still references them, which caused the "shifts not
-  // cleared" bug seen in live testing.
-  const r1 = await fire('bwClear', { clearType: 'schedules' });
+  // 1. Unbind the door schedule first — firmware refuses to wipe shift
+  // definitions the schedule still references (caused a real "shifts not
+  // cleared" bug in live testing).
+  const r1 = await fire('schedule.clear', () => simkura.clearDoorSchedule(hwId, DOOR));
   if (!r1.ok) return { ok: false, hwId, mode: 'rebuild', sequence, error: r1.detail };
 
-  // 2. Clear credentials before shifts (spec order).
-  const r2 = await fire('bw_cred_clear');
+  // 2. Clear credentials before shifts (spec order), then shifts, then any
+  // drifted/legacy holiday records (holiday push proper lands with the
+  // device-holiday attach feature).
+  const r2 = await fire('credentials.clear', () => simkura.clearCredentials(hwId, DOOR));
   if (!r2.ok) return { ok: false, hwId, mode: 'rebuild', sequence, error: r2.detail };
 
-  // 3. Now safe to wipe shift definitions — nothing references them.
-  const r3 = await fire('bw_shift_clear');
+  const r3 = await fire('shifts.clear', () => simkura.clearShifts(hwId, DOOR));
   if (!r3.ok) return { ok: false, hwId, mode: 'rebuild', sequence, error: r3.detail };
+
+  const r4 = await fire('holidays.clear', () => simkura.clearHolidays(hwId, DOOR));
+  if (!r4.ok) return { ok: false, hwId, mode: 'rebuild', sequence, error: r4.detail };
 
   // The wipe removed everything the lock held, including anything pending
   // removal — settle that bookkeeping before the re-adds (which may fail).
@@ -480,43 +471,42 @@ async function rebuild({ deviceId, hwId, sequence, fire }) {
     [deviceId]
   );
 
-  // 4. Push each active credential. Skip rows we can't map (unknown type,
-  // missing required fields) but keep going — they'll surface in the report.
+  // 3. Push each active credential. Skip rows we can't map but keep going —
+  // they surface in the report.
   const submittedCredJunctions = [];
   let credFailure = null;
   for (const c of creds) {
-    const payload = bwCredPayload(c);
-    if (!payload) {
-      sequence.push({ command: 'bwCred', status: 'skipped', detail: `credential ${c.id}: unmappable` });
+    const body = credentialAddBody(c);
+    if (!body) {
+      sequence.push({ command: 'credentials.add', status: 'skipped', detail: `credential ${c.id}: unmappable` });
       continue;
     }
-    const r = await fire('bwCred', payload);
+    const r = await fire('credentials.add', () => simkura.addCredential(hwId, DOOR, body));
     if (!r.ok) { credFailure = r.detail; break; }
     submittedCredJunctions.push(c.junction_id);
   }
   await stampSubmitted('device_credentials', submittedCredJunctions);
   if (credFailure) return { ok: false, hwId, mode: 'rebuild', sequence, error: credFailure };
 
-  // 5. Push each active shift.
+  // 4. Push each active shift on fresh firmware slots.
   const submittedShiftJunctions = [];
-  const submittedShiftIds = [];
+  const slots = [];
   let shiftFailure = null;
-  for (const s of shifts) {
-    const r = await fire('bwShift', bwShiftPayload(s));
+  for (const [idx, s] of shifts.entries()) {
+    const slot = idx + 1;
+    const r = await fire('shifts.add', () => simkura.addShift(hwId, DOOR, shiftAddBody(s, slot)));
     if (!r.ok) { shiftFailure = r.detail; break; }
     submittedShiftJunctions.push(s.junction_id);
-    submittedShiftIds.push(s.id);
+    slots.push(slot);
   }
   await stampSubmitted('device_shifts', submittedShiftJunctions);
   if (shiftFailure) return { ok: false, hwId, mode: 'rebuild', sequence, error: shiftFailure };
 
-  // 6. Bind shifts to the door. Only sent when there are shifts — the spec
-  // requires at least one scheduleId and firmware behaviour with an empty
-  // array is undefined. If there are no shifts the door runs open-access
-  // (credentials only, no time gating), which is the correct default.
-  if (submittedShiftIds.length > 0) {
-    const r6 = await fire('bwDoorSched', { scheduleIds: submittedShiftIds });
-    if (!r6.ok) return { ok: false, hwId, mode: 'rebuild', sequence, error: r6.detail };
+  // 5. Bind the schedule to the slots just defined (skipped when no shifts —
+  // see delta step 3).
+  if (slots.length > 0) {
+    const r5 = await fire('schedule.set', () => simkura.setDoorSchedule(hwId, DOOR, slots));
+    if (!r5.ok) return { ok: false, hwId, mode: 'rebuild', sequence, error: r5.detail };
   }
 
   return { ok: true, hwId, mode: 'rebuild', sequence };
@@ -525,33 +515,34 @@ async function rebuild({ deviceId, hwId, sequence, fire }) {
 // ── Clear ─────────────────────────────────────────────────────────────────────
 
 /**
- * Wipe the lock and drop its assignments: clear schedules, credentials, and
- * shifts on the firmware, then remove the corresponding device_credentials /
- * device_shifts rows (and soft-delete the underlying shifts — they're 1:1
- * with the device per the deviceShifts create() flow). The device itself
- * stays claimed by its company.
+ * Wipe the lock and drop its assignments: unbind the schedule, clear
+ * credentials, shifts, and holidays on the firmware, then remove the
+ * corresponding junction rows (and soft-delete the underlying shifts —
+ * they're 1:1 with the device per the deviceShifts create() flow). The
+ * device itself stays claimed by its company.
  *
- * DB cleanup happens per-step, right after the matching bwClear lands, so a
- * mid-sequence failure never claims more was removed than the lock actually
- * dropped. Success is externally verifiable: the device reports
- * fw_credential_count / fw_shift_count of 0 on its next check-in.
+ * DB cleanup happens per-step, right after the matching clear is accepted,
+ * so a mid-sequence failure never claims more was removed than the lock
+ * actually dropped. Success is externally verifiable: the device reports
+ * fw_credential_count / fw_shift_count / fw_holiday_count of 0 on its next
+ * check-in.
  */
 async function clearAll({ deviceId, simkura }) {
   const resolved = await loadDevice(deviceId);
   if (resolved.error) return resolved.error;
   const hwId = resolved.device.device_id;
   const sequence = [];
-  const fire = makeFire(simkura, hwId, sequence);
+  const fire = makeFire(sequence);
 
   // Unbind the door schedule first (same firmware constraint as pushAll).
-  const r1 = await fire('bwClear', { clearType: 'schedules' });
+  const r1 = await fire('schedule.clear', () => simkura.clearDoorSchedule(hwId, DOOR));
   if (!r1.ok) return { ok: false, hwId, sequence, error: r1.detail };
 
-  const r2 = await fire('bw_cred_clear');
+  const r2 = await fire('credentials.clear', () => simkura.clearCredentials(hwId, DOOR));
   if (!r2.ok) return { ok: false, hwId, sequence, error: r2.detail };
   await query(`DELETE FROM device_credentials WHERE device_id = $1`, [deviceId]);
 
-  const r3 = await fire('bw_shift_clear');
+  const r3 = await fire('shifts.clear', () => simkura.clearShifts(hwId, DOOR));
   if (!r3.ok) return { ok: false, hwId, sequence, error: r3.detail };
   await query(
     `UPDATE shifts
@@ -562,7 +553,12 @@ async function clearAll({ deviceId, simkura }) {
   );
   await query(`DELETE FROM device_shifts WHERE device_id = $1`, [deviceId]);
 
+  const r4 = await fire('holidays.clear', () => simkura.clearHolidays(hwId, DOOR));
+  if (!r4.ok) return { ok: false, hwId, sequence, error: r4.detail };
+  await query(`DELETE FROM device_holidays WHERE device_id = $1`, [deviceId]);
+
   return { ok: true, hwId, sequence };
 }
 
 module.exports = { pushAll, clearAll };
+module.exports._internal = { credentialAddBody, credentialRemoveArgs, shiftAddBody, mapCredentialType, hhmmss }; // for tests

@@ -8,8 +8,8 @@
  * credentials, 'remove' bulk-detaches them (confirm-gated).
  *
  * Changes reach the lock via "Update device" (see services/access/
- * devicePush.js): new attachments push bwCred, detachments push
- * bwCredDeactivate.
+ * devicePush.js): new attachments push credentials.add, detachments push
+ * credentials.remove.
  */
 
 import { useCallback, useEffect, useMemo, useState } from 'react';

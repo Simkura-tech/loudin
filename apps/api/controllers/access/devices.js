@@ -193,10 +193,10 @@ async function get(req, res, next) {
 
     // Pull both junctions' sync counts in one round trip. Three states:
     //   add       — active row that's not yet submitted to the firmware
-    //   submitted — pushed to Simkura, device hasn't confirmed yet
-    //               (NB: command.sent only currently fires for bwUnlock /
-    //                bwProvision, so for cred/shift this is effectively
-    //                "pushed" — see routes/webhooks.js TODO)
+    //   submitted — accepted by Simkura (202), device hasn't confirmed yet
+    //               (NB: v2 doesn't correlate device acks to command records
+    //                yet — an 'acknowledged' status is planned upstream — so
+    //                for cred/shift this is effectively "pushed")
     //   remove    — soft-deleted, firmware still has it cached
     const [{ rows: [credCounts] }, { rows: [shiftCounts] }] = await Promise.all([
       query(
@@ -660,24 +660,5 @@ async function releaseDevice(req, res, next) {
     return next(err);
   }
 }
-
-// â”€â”€ POST /api/devices/:hwId/commands â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
-// Forward a command to the device via Simkura's REST API. The command name
-// is whitelisted here — Simkura's catalog is bigger, but only commands an
-// admin should be able to trigger from the UI are exposed.
-//
-// Payload notes:
-//   bwState         — payload.state âˆˆ {'locked','unlocked','lockdown'} (or 0|1|2)
-//   bwProvision     — payload.cardType âˆˆ {0,1,2}, payload.latchInterval 1..255
-//   bwCred          — payload describes a credential to push. cardClass is
-//                     forced to 1 and shiftIds is stripped server-side
-//                     (credentials are master-only in Loudin).
-//   bwShift         — payload describes a shift to push
-//   bwCredDeactivate— payload identifies a single credential to deactivate
-//   bw_cred_clear   — no payload; wipes all credentials on the device
-//   bw_shift_clear  — no payload; wipes all shifts on the device
-//
-// Identifier convention: the URL param is the hardware device_id (unique at
-// the source). Platform admins can target any device — including ones not
 
 module.exports = { list, get, update, listEvents, listCompanyEvents, searchUnclaimed, claimDevice, releaseDevice };

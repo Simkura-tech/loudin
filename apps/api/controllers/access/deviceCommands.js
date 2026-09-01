@@ -16,28 +16,29 @@ function notFound(res) {
   return res.status(404).json({ error: 'Not Found', message: 'Device not found' });
 }
 
-// ── Command allowlist ────────────────────────────────────────────────────────
+// ── Command allowlist (v2 operations) ────────────────────────────────────────
+//
+// The ad-hoc command surface is deliberately smaller than Simkura's catalog:
+// only operations an admin should trigger directly from the UI. Data-record
+// operations (credentials/shifts/holidays/schedule) belong to the push
+// orchestrator (services/access/devicePush.js), never to this endpoint.
+// v1's bwCount (inventory request) is gone from v2 — record counts arrive
+// with every state sync instead.
 
 const ALLOWED_COMMANDS = new Set([
-  'bwUnlock',          // momentary unlock
-  'bwState',           // set persistent door state
-  'bwReset',           // soft reboot
-  'bwCount',           // request inventory dump
-  'bwProvision',       // initial provisioning — card-reader type + latch interval
-  'bwCred',            // push one credential
-  'bwShift',           // push one shift
-  'bwDoorSched',       // bind shift schedule(s) to the door
-  'bwCredDeactivate',  // deactivate a single credential
-  'bw_cred_clear',     // wipe all credentials on the device
-  'bw_shift_clear',    // wipe all shifts on the device
+  'lock.unlock',    // momentary unlock (re-locks after latchInterval)
+  'lock.set-state', // persistent door state, incl. 'normal' to clear an override
+  'lock.configure', // door reader/latch config (replaces v1 bwProvision)
+  'device.reboot',  // soft reboot, preserves data
 ]);
 
-// 'normal' (3) clears the override: the door returns to schedule-driven
-// operation. 0/1/2 pin the door in that state (override flag set — shifts
-// won't flip it back). Firmware supports 3 even though Simkura's public
-// docs only list 0–2; the gateway's payload builder maps 'normal' → 0x03.
-const BWSTATE_VALUES   = new Set(['locked', 'unlocked', 'lockdown', 'normal', 0, 1, 2, 3]);
-const BWPROVISION_CARD = new Set([0, 1, 2]); // 0=26-bit Wiegand, 1=32-bit HID, 2=Mifare 1k
+// 'normal' clears the override: the door returns to schedule-driven
+// operation. The other three pin the door in that state (override flag set —
+// shifts won't flip it back until cleared).
+const LOCK_STATES       = new Set(['locked', 'unlocked', 'lockdown', 'normal']);
+const CARD_TYPES        = new Set(['wiegand-26', 'hid-32', 'mifare-classic-1k']);
+const READER_FREQUENCIES = new Set(['prox', 'smartCard', 'nfc', 'ble']);
+const DOOR = 1; // single-door model — same constant as devicePush
 
 // ── Authorization ────────────────────────────────────────────────────────────
 
@@ -75,22 +76,18 @@ async function authorizeDeviceAccess(req) {
 
 // ── POST /api/devices/:hwId/commands ────────────────────────────────────────
 //
-// Forward a command to the device via Simkura's REST API. The command name
-// is whitelisted above — Simkura's catalog is bigger, but only commands an
-// admin should be able to trigger from the UI are exposed.
+// Forward a command to the device via Simkura's v2 API. Body:
+//   { command: <operation>, payload?: {...} }
 //
 // Payload notes:
-//   bwState         — payload.state ∈ {'locked','unlocked','lockdown','normal'} (or 0|1|2|3)
-//   bwProvision     — payload.cardType ∈ {0,1,2}, payload.latchInterval 1..255
-//   bwCred          — payload describes a credential to push. cardClass is
-//                     forced to 1 and shiftIds is stripped server-side
-//                     (credentials are master-only in Loudin).
-//   bwShift         — payload describes a shift to push
-//   bwDoorSched     — payload.scheduleIds is a non-empty array of shift ids
-//                     to bind to the door as its access schedule
-//   bwCredDeactivate— payload identifies a single credential to deactivate
-//   bw_cred_clear   — no payload; wipes all credentials on the device
-//   bw_shift_clear  — no payload; wipes all shifts on the device
+//   lock.unlock    — no payload
+//   lock.set-state — payload.state ∈ {'locked','unlocked','lockdown','normal'}
+//   lock.configure — ≥1 of payload.{cardType, readerFrequency, latchInterval}
+//   device.reboot  — no payload
+//
+// All commands are async: Simkura answers 202 with a queued-command record
+// (relayed as `simkura` in our response); a sleeping device executes on its
+// next wake.
 //
 // Identifier convention: the URL param is the hardware device_id (unique at
 // the source). Platform admins can target any device — including ones not
@@ -98,7 +95,6 @@ async function authorizeDeviceAccess(req) {
 async function sendCommand(req, res, next) {
   try {
     const { command, payload } = req.body || {};
-    let outboundPayload = payload || {};
 
     if (!command || typeof command !== 'string' || !ALLOWED_COMMANDS.has(command)) {
       return res.status(400).json({
@@ -106,66 +102,36 @@ async function sendCommand(req, res, next) {
         message: `command must be one of: ${[...ALLOWED_COMMANDS].join(', ')}`,
       });
     }
-    if (command === 'bwState') {
-      if (!payload || !BWSTATE_VALUES.has(payload.state)) {
-        return res.status(400).json({
-          error: 'Bad Request',
-          message: "bwState requires payload.state ∈ {'locked','unlocked','lockdown','normal'}",
-        });
-      }
+    if (command === 'lock.set-state' && (!payload || !LOCK_STATES.has(payload.state))) {
+      return res.status(400).json({
+        error: 'Bad Request',
+        message: "lock.set-state requires payload.state ∈ {'locked','unlocked','lockdown','normal'}",
+      });
     }
-    if (command === 'bwProvision') {
-      const card = payload?.cardType;
-      const latch = payload?.latchInterval;
-      if (card != null && !BWPROVISION_CARD.has(card)) {
+    if (command === 'lock.configure') {
+      const { cardType, readerFrequency, latchInterval } = payload || {};
+      if (cardType == null && readerFrequency == null && latchInterval == null) {
         return res.status(400).json({
           error: 'Bad Request',
-          message: 'bwProvision cardType must be 0 (26-bit Wiegand), 1 (32-bit HID), or 2 (Mifare 1k)',
+          message: 'lock.configure requires at least one of payload.{cardType, readerFrequency, latchInterval}',
         });
       }
-      if (latch != null && (!Number.isInteger(latch) || latch < 1 || latch > 255)) {
+      if (cardType != null && !CARD_TYPES.has(cardType)) {
         return res.status(400).json({
           error: 'Bad Request',
-          message: 'bwProvision latchInterval must be an integer between 1 and 255 seconds',
+          message: `lock.configure cardType must be one of: ${[...CARD_TYPES].join(', ')}`,
         });
       }
-    }
-    if (command === 'bwCred') {
-      if (!payload || typeof payload !== 'object') {
+      if (readerFrequency != null && !READER_FREQUENCIES.has(readerFrequency)) {
         return res.status(400).json({
           error: 'Bad Request',
-          message: 'bwCred requires a payload describing the credential',
+          message: `lock.configure readerFrequency must be one of: ${[...READER_FREQUENCIES].join(', ')}`,
         });
       }
-      // Credentials are master-only in Loudin: force cardClass:1 and drop
-      // any shiftIds the caller passed.
-      const { shiftIds: _drop, ...rest } = payload;
-      outboundPayload = { ...rest, cardClass: 1 };
-    }
-    if (command === 'bwShift') {
-      if (!payload || typeof payload !== 'object') {
+      if (latchInterval != null && (!Number.isInteger(latchInterval) || latchInterval < 1 || latchInterval > 255)) {
         return res.status(400).json({
           error: 'Bad Request',
-          message: 'bwShift requires a payload describing the shift',
-        });
-      }
-    }
-    if (command === 'bwDoorSched') {
-      // Binds one or more shift ids to the door as its access schedule.
-      // The firmware needs at least one id — an empty array is undefined
-      // behaviour (see services/access/devicePush.js step 7).
-      if (!payload || !Array.isArray(payload.scheduleIds) || payload.scheduleIds.length === 0) {
-        return res.status(400).json({
-          error: 'Bad Request',
-          message: 'bwDoorSched requires payload.scheduleIds — a non-empty array of shift ids',
-        });
-      }
-    }
-    if (command === 'bwCredDeactivate') {
-      if (!payload || typeof payload !== 'object') {
-        return res.status(400).json({
-          error: 'Bad Request',
-          message: 'bwCredDeactivate requires a payload identifying the credential',
+          message: 'lock.configure latchInterval must be an integer between 1 and 255 seconds',
         });
       }
     }
@@ -185,12 +151,26 @@ async function sendCommand(req, res, next) {
 
     const hwId = req.params.hwId;
     try {
-      const result = await simkura.publishCommand(hwId, command, outboundPayload);
+      let record;
+      switch (command) {
+        case 'lock.unlock':    record = await simkura.unlockDoor(hwId, DOOR); break;
+        case 'lock.set-state': record = await simkura.setLockState(hwId, DOOR, payload.state); break;
+        case 'lock.configure': {
+          const { cardType, readerFrequency, latchInterval } = payload;
+          record = await simkura.configureDoor(hwId, DOOR, {
+            ...(cardType != null ? { cardType } : {}),
+            ...(readerFrequency != null ? { readerFrequency } : {}),
+            ...(latchInterval != null ? { latchInterval } : {}),
+          });
+          break;
+        }
+        case 'device.reboot':  record = await simkura.rebootDevice(hwId); break;
+      }
       return res.json({
         success: true,
         command,
         device_id: hwId,
-        simkura: result,
+        simkura: record,
       });
     } catch (err) {
       const upstreamStatus  = err.response?.status;
@@ -290,15 +270,15 @@ async function clearDevice(req, res, next) {
 // ── GET /api/devices/:id/queue ───────────────────────────────────────────────
 //
 // Commands still in flight to the lock. The queue is simkura-core's, not
-// ours — Loudin stores nothing and proxies simkura's per-device queue on
-// every request. 'pending' rows are held until a sleeping device's next
-// wake, so an empty list means the lock has everything we've sent it.
+// ours — Loudin stores nothing and proxies simkura's per-device command
+// list on every request. Listing without a status filter returns exactly
+// the active queue (queued + sending, delivery order); 'queued' rows are
+// held until a sleeping device's next wake, so an empty list means the lock
+// has everything we've sent it.
 //
 // Fail-soft: if Simkura is unconfigured/unreachable we return 200 with
 // available:false rather than an error — this is a visibility feature and
 // the page around it should keep working.
-const IN_FLIGHT_QUEUE_STATUSES = new Set(['pending', 'processing']);
-
 async function getQueue(req, res, next) {
   try {
     const deviceId = Number(req.params.id);
@@ -323,23 +303,21 @@ async function getQueue(req, res, next) {
 
     let commands;
     try {
-      commands = await simkura.getDeviceQueue(device.device_id, { limit: 100 });
+      commands = await simkura.listCommands(device.device_id, { limit: 100 });
     } catch (err) {
       console.warn('[deviceCommands.getQueue] Simkura queue fetch failed for', device.device_id, '—', err.message);
       return res.json({ available: false, queue: [] });
     }
 
-    const queue = commands
-      .filter((c) => IN_FLIGHT_QUEUE_STATUSES.has(c.status))
-      .map((c) => ({
-        id:            c.id,
-        command_type:  c.command_type,
-        status:        c.status,
-        attempts:      c.attempts ?? 0,
-        max_attempts:  c.max_attempts ?? null,
-        created_at:    c.created_at ?? null,
-        error_message: c.error_message ?? null,
-      }));
+    const queue = commands.map((c) => ({
+      id:            c.id,
+      command_type:  c.operation,       // key kept for UI compatibility
+      status:        c.status,          // 'queued' | 'sending'
+      attempts:      c.attempts ?? 0,
+      created_at:    c.createdAt ?? null,
+      expires_at:    c.expiresAt ?? null,
+      error_message: c.error ?? null,
+    }));
 
     return res.json({ available: true, queue });
   } catch (err) {
