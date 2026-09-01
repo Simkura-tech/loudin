@@ -22,7 +22,7 @@ const V2_RESOURCE = {
     status: 'online', deployed: true,
     lastSeen: '2026-08-31T12:00:00.000Z',
     lastSeenLocal: '2026-08-31T05:00:00.000-07:00',
-    gatewayConnection: 'Bluewave',
+    gatewayConnection: 'TestGateway',
   },
   device: {
     id: 'nrf-352656100012345', manufacturer: 'Simkura', board: 'SB6',

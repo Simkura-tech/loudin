@@ -72,8 +72,11 @@ Then open **http://localhost:8081** and log in with the seeded platform admin:
 
 The seed also creates a reseller admin (`admin@acme-dist.example`) and an
 end-user company admin (`admin@democorp.example`) with the same password,
-plus demo people, devices, and credentials — see
-`apps/api/database/seeds/seed.sql`.
+plus demo people and credentials — see `apps/api/database/seeds/seed.sql`.
+The only seeded devices are Simkura's three public **sandbox** locks
+(`00000000-0000-0000-0000-0000000000{10,20,30}`), already claimed by the
+end-user company, so device pages, state sync and pushes work out of the
+box with the sandbox API key the compose stack is configured with.
 
 First boot runs migrations and the dev seed automatically (both are
 idempotent, so restarting the stack is safe). The web container's nginx

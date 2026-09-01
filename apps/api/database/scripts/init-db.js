@@ -27,7 +27,7 @@ const opts = {
 };
 
 // Refuse destructive / seeding operations in production. The seed fixtures
-// (OMO-AABB00000X devices, demo companies, etc.) are dev-only, and --reset
+// (the Simkura sandbox devices, demo companies, etc.) are dev-only, and --reset
 // drops the entire database. Both must be impossible to trigger by SSH-ing
 // to the production VM and typing the wrong command.
 if (process.env.NODE_ENV === 'production' && (opts.reset || opts.seed)) {

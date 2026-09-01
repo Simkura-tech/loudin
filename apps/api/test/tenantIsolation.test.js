@@ -33,7 +33,7 @@ const { pool } = require('../database/db');
 const SEEDED = {
   platform:      { email: 'platform-admin@loudin.com', password: 'Password123!' },
   reseller:      { email: 'admin@acme-dist.example',    password: 'Password123!' },
-  otherReseller: { email: 'admin@bluewave.example',     password: 'Password123!' },
+  otherReseller: { email: 'admin@second-reseller.example', password: 'Password123!' },
   endUser:       { email: 'admin@democorp.example',     password: 'Password123!' },
 };
 
@@ -47,6 +47,7 @@ const NON_ADMIN = {
 };
 const FOREIGN_PERSON_EMAIL   = 'foreign.fixture@tenant-isolation.test';
 const FOREIGN_CREDENTIAL_TAG = 'TENANT_ISOLATION_FIXTURE';
+const FOREIGN_DEVICE_HW_ID   = 'TEST-TENANT-ISOLATION-FOREIGN';
 
 async function loginAs({ email, password }) {
   const res = await request(app)
@@ -63,6 +64,7 @@ async function loginAs({ email, password }) {
 
 /** Remove any rows a previous (crashed) run may have left behind. */
 async function cleanFixtures() {
+  await pool.query('DELETE FROM devices WHERE device_id = $1', [FOREIGN_DEVICE_HW_ID]);
   await pool.query('DELETE FROM credentials WHERE credential_name = $1', [FOREIGN_CREDENTIAL_TAG]);
   await pool.query('DELETE FROM people WHERE email = $1', [FOREIGN_PERSON_EMAIL]);
   await pool.query('DELETE FROM users WHERE email = $1', [NON_ADMIN.email]);
@@ -78,10 +80,11 @@ describe('Loudin API — tenant isolation', () => {
   let demoPeopleIds, demoCredentialIds, demoDeviceIds;
   let demoPersonId, demoDeviceId;
 
-  // Fixture rows in the UNRELATED end-user company (created here, deleted in after)
-  let foreignPersonId, foreignCredentialId;
-  // Seeded device owned by the unrelated company (read-only)
-  let foreignDeviceId;
+  // Fixture rows in the UNRELATED end-user company (created here, deleted in
+  // after). The seed deliberately gives that company no devices — only the
+  // three Simkura sandbox locks are seeded, on Demo Customer Co — so the
+  // foreign device is a fixture too.
+  let foreignPersonId, foreignCredentialId, foreignDeviceId;
 
   before(async () => {
     // ── Resolve seeded companies ─────────────────────────────────────────
@@ -97,7 +100,7 @@ describe('Loudin API — tenant isolation', () => {
 
     await cleanFixtures();
 
-    // ── Fixture rows in the unrelated company (Brookline ← BlueWave) ─────
+    // ── Fixture rows in the unrelated company (Brookline ← the 2nd reseller) ─
     ({ rows: [{ id: foreignPersonId }] } = await pool.query(
       `INSERT INTO people (company_id, first_name, last_name, email, status)
        VALUES ($1, 'Foreign', 'Fixture', $2, 'active') RETURNING id`,
@@ -109,8 +112,9 @@ describe('Loudin API — tenant isolation', () => {
       [brooklineId, foreignPersonId, FOREIGN_CREDENTIAL_TAG]
     ));
     ({ rows: [{ id: foreignDeviceId }] } = await pool.query(
-      `SELECT id FROM devices WHERE company_id = $1 ORDER BY id LIMIT 1`,
-      [brooklineId]
+      `INSERT INTO devices (company_id, device_id, device_type, device_name, status, assigned_at)
+       VALUES ($1, $2, 'sb6', 'Foreign Fixture Door', 'offline', NOW()) RETURNING id`,
+      [brooklineId, FOREIGN_DEVICE_HW_ID]
     ));
 
     // ── Non-admin (user_type_id=2) fixture user in the end-user company ──
@@ -327,7 +331,7 @@ describe('Loudin API — tenant isolation', () => {
       assert.equal(res.status, 404);
     });
 
-    test("cross-reseller: BlueWave admin cannot read Acme's customer → 404", async () => {
+    test("cross-reseller: the other reseller's admin cannot read Acme's customer → 404", async () => {
       const res = await request(app)
         .get(`/api/reseller/customers/${demoId}`).set('Cookie', otherResellerCookie);
       assert.equal(res.status, 404);

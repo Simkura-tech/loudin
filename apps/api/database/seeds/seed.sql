@@ -10,17 +10,27 @@
 -- so re-running doesn't create duplicates.
 --
 -- What you get after a --reset --seed:
---   * 3 companies (platform, reseller, end-user)
---   * 3 admin users (one per company)
+--   * 5 companies — platform, two resellers (Acme Distribution, Second
+--     Reseller Co), two end-users (Demo Customer Co ← Acme, Brookline
+--     Coworking ← Second Reseller Co). The second pair exists so
+--     cross-reseller boundaries can be exercised (and is required by
+--     test/tenantIsolation.test.js); nothing else is seeded so the
+--     platform companies/users views stay slim.
+--   * 4 admin users (one per company except Brookline)
 --   * 12 people in the end-user company spread across 4 departments
 --   * 4 people groups
---   * 5 devices (door locks) on the end-user company, mixed online/offline/error
+--   * 3 devices on the end-user company — Simkura's three PUBLIC SANDBOX
+--     fixture locks (…0010 online, …0020 offline/low battery, …0030 online),
+--     already claimed so state sync, pushes and commands work out of the box
+--     with the sandbox API key (SIMKURA_API_KEY=sk_demo_simkura_sandbox).
+--     No other devices are seeded: anything else would be junk Simkura
+--     doesn't know about (state sync 403/404s it on every tick).
 --   * 15 credentials (PINs, HID prox, MIFARE) tied to various people
---   * 12 device_credentials junctions (some doors have many credentials,
---     others are restricted)
+--   * 16 device_credentials junctions (the front door has many credentials,
+--     the server room is restricted)
 --   * 3 shifts attached to specific devices (business hours, after-hours, etc.)
---   * ~25 device_events spread across devices and event categories so the
---     activity feed has real-looking data
+--   * ~23 device_events spread across the devices and event categories so
+--     the activity feed has real-looking data
 -- ============================================================================
 
 DO $seed$
@@ -37,7 +47,6 @@ DECLARE
   grp_eng INTEGER; grp_ops INTEGER; grp_desk INTEGER; grp_fac INTEGER;
 
   dev_front     INTEGER; dev_back   INTEGER; dev_server INTEGER;
-  dev_closet    INTEGER; dev_gate   INTEGER;
 
   cred_alice_pin   INTEGER; cred_alice_hid INTEGER;
   cred_bob_pin     INTEGER; cred_bob_hid   INTEGER;
@@ -53,10 +62,8 @@ DECLARE
 
   shift_business INTEGER; shift_afterhrs INTEGER; shift_admin INTEGER;
 
-  -- Extra companies + devices to give the Insights page some growth shape.
-  reseller_bluewave INTEGER; reseller_lockwise INTEGER;
-  eu_pinecrest INTEGER; eu_brookline INTEGER; eu_meridian INTEGER;
-  eu_aurora    INTEGER; eu_yoga      INTEGER; eu_bank     INTEGER;
+  -- Second reseller + customer for cross-tenant boundaries (tests + manual).
+  reseller_two INTEGER; eu_brookline INTEGER;
 BEGIN
   IF EXISTS (SELECT 1 FROM companies LIMIT 1) THEN
     RAISE NOTICE 'Seed: companies table is not empty — skipping.';
@@ -143,52 +150,41 @@ BEGIN
     (end_user_id, grp_fac,  'Leo',    'Martinez', 'leo.martinez@democorp.example',   '555-0112', 'EMP-012', 'Facilities',  'Maintenance Tech',    'active')
     RETURNING id INTO leo_id;
 
-  -- ── Devices (5 door locks) ───────────────────────────────────────────────
+
+  -- ── Devices: the 3 Simkura sandbox fixtures ──────────────────────────────
+  -- device_id is Simkura's canonical id. These three exist in the public
+  -- sandbox (docs.simkura.com/authentication), so with the sandbox key the
+  -- state-sync worker mirrors real state onto them within seconds and the
+  -- push / command endpoints return real 202 records. The initial column
+  -- values below mirror what the sandbox reports (2026-09) so the UI looks
+  -- right before the first sync tick.
   INSERT INTO devices (
     company_id, reseller_company_id, device_id, device_type, firmware_version,
-    device_name, location, status, door_state, battery_percent, power_mode,
-    last_seen, assigned_at
+    device_name, location, status, door_state, battery_percent, battery_health,
+    power_mode, last_seen, assigned_at
   ) VALUES
-    (end_user_id, reseller_id, 'OMO-AABB000001', 'sb6', '1.4.2',
-     'Front Door',     'Main entrance, Floor 1',   'online',  'locked',   87, 'active',
-     CURRENT_TIMESTAMP - INTERVAL '2 minutes',  CURRENT_TIMESTAMP - INTERVAL '30 days')
+    (end_user_id, reseller_id, '00000000-0000-0000-0000-000000000010', 'sb6', '2.3.3',
+     'Front Door',    'Main entrance, Floor 1', 'online',  'locked', 95, 'ok',
+     'sleep',      CURRENT_TIMESTAMP - INTERVAL '2 minutes', CURRENT_TIMESTAMP - INTERVAL '30 days')
   RETURNING id INTO dev_front;
   INSERT INTO devices (
     company_id, reseller_company_id, device_id, device_type, firmware_version,
-    device_name, location, status, door_state, battery_percent, power_mode,
-    last_seen, assigned_at
+    device_name, location, status, door_state, battery_percent, battery_health,
+    power_mode, last_seen, assigned_at
   ) VALUES
-    (end_user_id, reseller_id, 'OMO-AABB000002', 'sb6', '1.4.2',
-     'Back Entrance',  'Loading dock',             'online',  'locked',   42, 'active',
-     CURRENT_TIMESTAMP - INTERVAL '5 minutes',  CURRENT_TIMESTAMP - INTERVAL '30 days')
+    (end_user_id, reseller_id, '00000000-0000-0000-0000-000000000020', 'sb6', '2.3.3',
+     'Back Entrance', 'Loading dock',           'offline', 'locked', 12, 'low',
+     'deep_sleep', CURRENT_TIMESTAMP - INTERVAL '6 hours',   CURRENT_TIMESTAMP - INTERVAL '30 days')
   RETURNING id INTO dev_back;
   INSERT INTO devices (
     company_id, reseller_company_id, device_id, device_type, firmware_version,
-    device_name, location, status, door_state, battery_percent, power_mode,
-    last_seen, assigned_at
+    device_name, location, status, door_state, battery_percent, battery_health,
+    power_mode, last_seen, assigned_at
   ) VALUES
-    (end_user_id, reseller_id, 'OMO-AABB000003', 'sb6', '1.4.2',
-     'Server Room',    'Floor 2, IT corridor',     'online',  'locked',   91, 'active',
-     CURRENT_TIMESTAMP - INTERVAL '1 minute',   CURRENT_TIMESTAMP - INTERVAL '30 days')
+    (end_user_id, reseller_id, '00000000-0000-0000-0000-000000000030', 'sb6', '2.3.3',
+     'Server Room',   'Floor 2, IT corridor',   'online',  'locked', 82, 'ok',
+     'sleep',      CURRENT_TIMESTAMP - INTERVAL '1 minute',  CURRENT_TIMESTAMP - INTERVAL '14 days')
   RETURNING id INTO dev_server;
-  INSERT INTO devices (
-    company_id, reseller_company_id, device_id, device_type, firmware_version,
-    device_name, location, status, door_state, battery_percent, power_mode,
-    last_seen, assigned_at
-  ) VALUES
-    (end_user_id, reseller_id, 'OMO-AABB000004', 'sb6', '1.3.8',
-     'Storage Closet', 'Floor 1, behind reception','offline', 'locked',   12, 'deep_sleep',
-     CURRENT_TIMESTAMP - INTERVAL '3 days',     CURRENT_TIMESTAMP - INTERVAL '60 days')
-  RETURNING id INTO dev_closet;
-  INSERT INTO devices (
-    company_id, reseller_company_id, device_id, device_type, firmware_version,
-    device_name, location, status, door_state, battery_percent, power_mode,
-    last_seen, assigned_at
-  ) VALUES
-    (end_user_id, reseller_id, 'OMO-AABB000005', 'sb6', '1.4.2',
-     'Side Gate',      'Parking lot',              'error',   'unknown',  64, 'active',
-     CURRENT_TIMESTAMP - INTERVAL '12 hours',   CURRENT_TIMESTAMP - INTERVAL '14 days')
-  RETURNING id INTO dev_gate;
 
   -- ── Credentials (15 spread across 11 people) ─────────────────────────────
   -- credential_value carries PIN values plain (firmware compares plain — see
@@ -262,18 +258,6 @@ BEGIN
     (dev_server, cred_emma_hid),
     (dev_server, cred_isabel_hid);
 
-  -- Storage Closet: operations + facilities crew
-  INSERT INTO device_credentials (device_id, credential_id) VALUES
-    (dev_closet, cred_bob_hid),
-    (dev_closet, cred_carol_mif),
-    (dev_closet, cred_leo_mif),
-    (dev_closet, cred_isabel_hid);
-
-  -- Side Gate: facilities only
-  INSERT INTO device_credentials (device_id, credential_id) VALUES
-    (dev_gate, cred_carol_mif),
-    (dev_gate, cred_isabel_hid),
-    (dev_gate, cred_leo_mif);
 
   -- ── Shifts (per-device door schedules) ───────────────────────────────────
   -- Shifts in our model are company-scoped + attached to specific devices
@@ -297,251 +281,119 @@ BEGIN
     (dev_front, shift_business),
     (dev_back,  shift_business),
     (dev_front, shift_afterhrs),
-    (dev_closet, shift_admin),
-    (dev_back,   shift_admin);
+    (dev_back,  shift_admin);
 
   -- ── device_events (activity feed) ───────────────────────────────────────
-  -- ~25 rows across the 5 devices, last 7 days, mixed types and severities.
+  -- ~23 rows across the 3 devices, last 7 days, mixed types and severities.
   -- device_id stores the hardware id (matches devices.device_id, not FK).
   INSERT INTO device_events (company_id, device_id, event_type, event_category, severity, event_data, event_timestamp, received_at) VALUES
     -- Front Door — busy day yesterday
-    (end_user_id, 'OMO-AABB000001', 'access.granted',     'access_control', 'info',
+    (end_user_id, '00000000-0000-0000-0000-000000000010', 'access.granted',     'access_control', 'info',
        '{"credential":{"cardNumber":12047,"facilityCode":100},"person":"Alice Smith"}'::jsonb,
        CURRENT_TIMESTAMP - INTERVAL '32 minutes', CURRENT_TIMESTAMP - INTERVAL '32 minutes'),
-    (end_user_id, 'OMO-AABB000001', 'access.granted',     'access_control', 'info',
+    (end_user_id, '00000000-0000-0000-0000-000000000010', 'access.granted',     'access_control', 'info',
        '{"credential":{"cardNumber":12050,"facilityCode":100},"person":"Emma Rodriguez"}'::jsonb,
        CURRENT_TIMESTAMP - INTERVAL '1 hour 18 minutes', CURRENT_TIMESTAMP - INTERVAL '1 hour 18 minutes'),
-    (end_user_id, 'OMO-AABB000001', 'access.denied',      'access_control', 'warning',
+    (end_user_id, '00000000-0000-0000-0000-000000000010', 'access.denied',      'access_control', 'warning',
        '{"reason":"unknown_card","attemptedCredential":{"cardNumber":99999,"facilityCode":42}}'::jsonb,
        CURRENT_TIMESTAMP - INTERVAL '3 hours 4 minutes', CURRENT_TIMESTAMP - INTERVAL '3 hours 4 minutes'),
-    (end_user_id, 'OMO-AABB000001', 'lock.state_changed', 'lock_state',     'info',
+    (end_user_id, '00000000-0000-0000-0000-000000000010', 'lock.state_changed', 'lock_state',     'info',
        '{"from":"unlocked","to":"locked","trigger":"latch_timeout"}'::jsonb,
        CURRENT_TIMESTAMP - INTERVAL '4 hours', CURRENT_TIMESTAMP - INTERVAL '4 hours'),
-    (end_user_id, 'OMO-AABB000001', 'command.sent',       'command',        'info',
+    (end_user_id, '00000000-0000-0000-0000-000000000010', 'command.sent',       'command',        'info',
        '{"command":"bwUnlock","by":"admin@democorp.example"}'::jsonb,
        CURRENT_TIMESTAMP - INTERVAL '4 hours 1 minute', CURRENT_TIMESTAMP - INTERVAL '4 hours 1 minute'),
-    (end_user_id, 'OMO-AABB000001', 'access.granted',     'access_control', 'info',
+    (end_user_id, '00000000-0000-0000-0000-000000000010', 'access.granted',     'access_control', 'info',
        '{"credential":{"pin":"40293"},"person":"Alice Smith"}'::jsonb,
        CURRENT_TIMESTAMP - INTERVAL '1 day 2 hours', CURRENT_TIMESTAMP - INTERVAL '1 day 2 hours'),
-    (end_user_id, 'OMO-AABB000001', 'access.granted',     'access_control', 'info',
+    (end_user_id, '00000000-0000-0000-0000-000000000010', 'access.granted',     'access_control', 'info',
        '{"credential":{"pin":"67891"},"person":"Henry Brown"}'::jsonb,
        CURRENT_TIMESTAMP - INTERVAL '1 day 6 hours', CURRENT_TIMESTAMP - INTERVAL '1 day 6 hours'),
     -- Back Entrance — loading dock activity
-    (end_user_id, 'OMO-AABB000002', 'access.granted',     'access_control', 'info',
+    (end_user_id, '00000000-0000-0000-0000-000000000020', 'access.granted',     'access_control', 'info',
        '{"credential":{"pin":"21678"},"person":"Frank O’Brien"}'::jsonb,
        CURRENT_TIMESTAMP - INTERVAL '6 hours', CURRENT_TIMESTAMP - INTERVAL '6 hours'),
-    (end_user_id, 'OMO-AABB000002', 'access.granted',     'access_control', 'info',
+    (end_user_id, '00000000-0000-0000-0000-000000000020', 'access.granted',     'access_control', 'info',
        '{"credential":{"cardNumber":12048,"facilityCode":100},"person":"Bob Lee"}'::jsonb,
        CURRENT_TIMESTAMP - INTERVAL '1 day 1 hour', CURRENT_TIMESTAMP - INTERVAL '1 day 1 hour'),
-    (end_user_id, 'OMO-AABB000002', 'device.wake',        'lifecycle',      'info',
+    (end_user_id, '00000000-0000-0000-0000-000000000020', 'device.wake',        'lifecycle',      'info',
        '{"from":"sleep","battery":42}'::jsonb,
        CURRENT_TIMESTAMP - INTERVAL '2 days', CURRENT_TIMESTAMP - INTERVAL '2 days'),
-    (end_user_id, 'OMO-AABB000002', 'access.denied',      'access_control', 'warning',
+    (end_user_id, '00000000-0000-0000-0000-000000000020', 'access.denied',      'access_control', 'warning',
        '{"reason":"out_of_schedule","attemptedCredential":{"pin":"88712"}}'::jsonb,
        CURRENT_TIMESTAMP - INTERVAL '2 days 4 hours', CURRENT_TIMESTAMP - INTERVAL '2 days 4 hours'),
     -- Server Room — restricted, mostly engineering
-    (end_user_id, 'OMO-AABB000003', 'access.granted',     'access_control', 'info',
+    (end_user_id, '00000000-0000-0000-0000-000000000030', 'access.granted',     'access_control', 'info',
        '{"credential":{"cardNumber":12049,"facilityCode":100},"person":"David Kim"}'::jsonb,
        CURRENT_TIMESTAMP - INTERVAL '45 minutes', CURRENT_TIMESTAMP - INTERVAL '45 minutes'),
-    (end_user_id, 'OMO-AABB000003', 'access.denied',      'access_control', 'warning',
+    (end_user_id, '00000000-0000-0000-0000-000000000030', 'access.denied',      'access_control', 'warning',
        '{"reason":"not_authorized","attemptedCredential":{"cardNumber":12047,"facilityCode":100},"person":"Alice Smith"}'::jsonb,
        CURRENT_TIMESTAMP - INTERVAL '2 hours 15 minutes', CURRENT_TIMESTAMP - INTERVAL '2 hours 15 minutes'),
-    (end_user_id, 'OMO-AABB000003', 'access.granted',     'access_control', 'info',
+    (end_user_id, '00000000-0000-0000-0000-000000000030', 'access.granted',     'access_control', 'info',
        '{"credential":{"cardNumber":12050,"facilityCode":100},"person":"Emma Rodriguez"}'::jsonb,
        CURRENT_TIMESTAMP - INTERVAL '1 day 3 hours', CURRENT_TIMESTAMP - INTERVAL '1 day 3 hours'),
-    (end_user_id, 'OMO-AABB000003', 'lock.state_changed', 'lock_state',     'info',
+    (end_user_id, '00000000-0000-0000-0000-000000000030', 'lock.state_changed', 'lock_state',     'info',
        '{"from":"unlocked","to":"locked","trigger":"latch_timeout"}'::jsonb,
        CURRENT_TIMESTAMP - INTERVAL '1 day 3 hours 1 minute', CURRENT_TIMESTAMP - INTERVAL '1 day 3 hours 1 minute'),
-    -- Storage Closet — offline / sparse events
-    (end_user_id, 'OMO-AABB000004', 'device.sleep',       'lifecycle',      'info',
+    -- Back Entrance — went quiet on a low battery
+    (end_user_id, '00000000-0000-0000-0000-000000000020', 'device.sleep',       'lifecycle',      'info',
        '{"reason":"low_battery","battery":12}'::jsonb,
        CURRENT_TIMESTAMP - INTERVAL '3 days', CURRENT_TIMESTAMP - INTERVAL '3 days'),
-    (end_user_id, 'OMO-AABB000004', 'access.granted',     'access_control', 'info',
+    (end_user_id, '00000000-0000-0000-0000-000000000020', 'access.granted',     'access_control', 'info',
        '{"credential":{"cardNumber":"04A1E455"},"person":"Leo Martinez"}'::jsonb,
        CURRENT_TIMESTAMP - INTERVAL '3 days 8 hours', CURRENT_TIMESTAMP - INTERVAL '3 days 8 hours'),
-    (end_user_id, 'OMO-AABB000004', 'access.granted',     'access_control', 'info',
+    (end_user_id, '00000000-0000-0000-0000-000000000020', 'access.granted',     'access_control', 'info',
        '{"credential":{"cardNumber":"04A12B3C"},"person":"Carol Nguyen"}'::jsonb,
        CURRENT_TIMESTAMP - INTERVAL '4 days', CURRENT_TIMESTAMP - INTERVAL '4 days'),
-    -- Side Gate — error state, recent issues
-    (end_user_id, 'OMO-AABB000005', 'device.restart',     'lifecycle',      'warning',
+    -- Server Room — an earlier rough patch (watchdog restart, failed command)
+    (end_user_id, '00000000-0000-0000-0000-000000000030', 'device.restart',     'lifecycle',      'warning',
        '{"reason":"watchdog","uptime_s":86400}'::jsonb,
        CURRENT_TIMESTAMP - INTERVAL '12 hours', CURRENT_TIMESTAMP - INTERVAL '12 hours'),
-    (end_user_id, 'OMO-AABB000005', 'command.failed',     'command',        'error',
+    (end_user_id, '00000000-0000-0000-0000-000000000030', 'command.failed',     'command',        'error',
        '{"command":"bwUnlock","error":"device_unreachable"}'::jsonb,
        CURRENT_TIMESTAMP - INTERVAL '14 hours', CURRENT_TIMESTAMP - INTERVAL '14 hours'),
-    (end_user_id, 'OMO-AABB000005', 'access.granted',     'access_control', 'info',
+    (end_user_id, '00000000-0000-0000-0000-000000000030', 'access.granted',     'access_control', 'info',
        '{"credential":{"cardNumber":"04A1D701"},"person":"Isabel Garcia"}'::jsonb,
        CURRENT_TIMESTAMP - INTERVAL '1 day 18 hours', CURRENT_TIMESTAMP - INTERVAL '1 day 18 hours'),
-    (end_user_id, 'OMO-AABB000005', 'access.granted',     'access_control', 'info',
+    (end_user_id, '00000000-0000-0000-0000-000000000030', 'access.granted',     'access_control', 'info',
        '{"credential":{"cardNumber":"04A1E455"},"person":"Leo Martinez"}'::jsonb,
        CURRENT_TIMESTAMP - INTERVAL '2 days 9 hours', CURRENT_TIMESTAMP - INTERVAL '2 days 9 hours'),
-    (end_user_id, 'OMO-AABB000005', 'access.denied',      'access_control', 'warning',
+    (end_user_id, '00000000-0000-0000-0000-000000000030', 'access.denied',      'access_control', 'warning',
        '{"reason":"lockdown","attemptedCredential":{"cardNumber":"04A12B3C"},"person":"Carol Nguyen"}'::jsonb,
        CURRENT_TIMESTAMP - INTERVAL '5 days', CURRENT_TIMESTAMP - INTERVAL '5 days');
 
-  -- ── Insights demo data ──────────────────────────────────────────────────
-  -- Extra resellers + end-users + devices with `created_at` spread across
-  -- the last ~12 months so /app/insights renders a real growth curve.
-  --
-  -- Shape we're aiming for:
-  --   Acme Distribution  — established, big jump in the most recent month
-  --                        (Demo Customer Co's 5 devices were just created)
-  --   BlueWave Security  — breakout, started ~7 months ago, rapid growth
-  --   Lockwise Partners  — emerging, only the last 3 months
-  --   Direct (no parent) — small flat baseline
+  -- ── Second reseller + its customer ───────────────────────────────────────
+  -- One unrelated reseller/customer pair (Second Reseller Co → Brookline) —
+  -- the
+  -- minimum for exercising cross-tenant boundaries by hand and for the
+  -- tenant-isolation tests. Deliberately nothing more: no extra tenants,
+  -- no devices (the only seeded locks are the three sandbox fixtures
+  -- above), so the platform companies/users views stay slim.
 
   INSERT INTO companies (name, company_type, status, company_email, company_url, created_at, updated_at)
-    VALUES ('BlueWave Security', 'reseller', 'active', 'sales@bluewave.example', 'https://bluewave.example',
+    VALUES ('Second Reseller Co', 'reseller', 'active', 'sales@second-reseller.example', 'https://second-reseller.example',
             NOW() - INTERVAL '7 months', NOW() - INTERVAL '7 months')
-    RETURNING id INTO reseller_bluewave;
-  INSERT INTO companies (name, company_type, status, company_email, company_url, created_at, updated_at)
-    VALUES ('Lockwise Partners', 'reseller', 'active', 'hello@lockwise.example', 'https://lockwise.example',
-            NOW() - INTERVAL '3 months', NOW() - INTERVAL '3 months')
-    RETURNING id INTO reseller_lockwise;
+    RETURNING id INTO reseller_two;
 
-  -- Admin users for the new resellers — same dev password (Password123!),
-  -- so you can sign in and test cross-reseller boundaries (e.g. confirm a
-  -- BlueWave admin can't see Acme's customer drill-in by URL guessing).
+  -- Admin for the second reseller — same dev password (Password123!), so you
+  -- can sign in and confirm one reseller's admin can't see another's
+  -- customer drill-in by URL guessing.
   INSERT INTO users (
     company_id, user_type_id, email, first_name, last_name,
     password_hash, email_verified, email_verified_at, status
   ) VALUES
-    (reseller_bluewave, 1, 'admin@bluewave.example', 'BlueWave', 'Admin',
+    (reseller_two, 1, 'admin@second-reseller.example', 'Secondary', 'Admin',
      '$2b$10$/sl9aeZKp7Kwh0vII3Mxx.WVvBnBbzxJ0jBZPbSQM2bmmQCfoB79y',
-     true, NOW() - INTERVAL '7 months', 'active'),
-    (reseller_lockwise, 1, 'admin@lockwise.example', 'Lockwise', 'Admin',
-     '$2b$10$/sl9aeZKp7Kwh0vII3Mxx.WVvBnBbzxJ0jBZPbSQM2bmmQCfoB79y',
-     true, NOW() - INTERVAL '3 months', 'active');
+     true, NOW() - INTERVAL '7 months', 'active');
 
-  -- End-users locked to specific resellers
-  INSERT INTO companies (name, company_type, status, company_email,
-                         parent_company_id, parent_locked_at, created_at, updated_at)
-    VALUES ('Pinecrest Apartments', 'end_user', 'active', 'ops@pinecrest.example',
-            reseller_id,        NOW() - INTERVAL '9 months',
-            NOW() - INTERVAL '9 months', NOW() - INTERVAL '9 months')
-    RETURNING id INTO eu_pinecrest;
   INSERT INTO companies (name, company_type, status, company_email,
                          parent_company_id, parent_locked_at, created_at, updated_at)
     VALUES ('Brookline Coworking', 'end_user', 'active', 'admin@brookline.example',
-            reseller_bluewave,  NOW() - INTERVAL '7 months',
+            reseller_two,  NOW() - INTERVAL '7 months',
             NOW() - INTERVAL '7 months', NOW() - INTERVAL '7 months')
     RETURNING id INTO eu_brookline;
-  INSERT INTO companies (name, company_type, status, company_email,
-                         parent_company_id, parent_locked_at, created_at, updated_at)
-    VALUES ('Meridian Hotels',    'end_user', 'active', 'it@meridianhotels.example',
-            reseller_bluewave,  NOW() - INTERVAL '5 months',
-            NOW() - INTERVAL '5 months', NOW() - INTERVAL '5 months')
-    RETURNING id INTO eu_meridian;
-  INSERT INTO companies (name, company_type, status, company_email,
-                         parent_company_id, parent_locked_at, created_at, updated_at)
-    VALUES ('Aurora Labs',        'end_user', 'active', 'it@auroralabs.example',
-            reseller_lockwise,  NOW() - INTERVAL '3 months',
-            NOW() - INTERVAL '3 months', NOW() - INTERVAL '3 months')
-    RETURNING id INTO eu_aurora;
 
-  -- "Direct" end-users — no reseller parent
-  INSERT INTO companies (name, company_type, status, company_email, created_at, updated_at)
-    VALUES ('Hollow Pine Yoga', 'end_user', 'active', 'studio@hollowpine.example',
-            NOW() - INTERVAL '11 months', NOW() - INTERVAL '11 months')
-    RETURNING id INTO eu_yoga;
-  INSERT INTO companies (name, company_type, status, company_email, created_at, updated_at)
-    VALUES ('GraniteBank',      'end_user', 'active', 'facilities@granitebank.example',
-            NOW() - INTERVAL '4 months', NOW() - INTERVAL '4 months')
-    RETURNING id INTO eu_bank;
-
-  -- Devices: a small helper-pattern using unnest(...) WITH ORDINALITY so we
-  -- can put each device at a specific historical created_at (months ago).
-  -- The chart attributes month-end MRR using created_at, so the offsets
-  -- below drive the shape directly.
-
-  -- Pinecrest (Acme): 3 devices, 9/6/3 months ago
-  INSERT INTO devices (company_id, reseller_company_id, device_id, device_type, firmware_version,
-                       device_name, location, status, door_state, battery_percent, power_mode,
-                       created_at, updated_at, assigned_at, last_seen)
-  SELECT eu_pinecrest, reseller_id,
-         'OMO-PINE' || lpad(idx::text, 6, '0'),
-         'sb6', '1.4.2',
-         'Pinecrest Door ' || idx, 'Building ' || idx,
-         'online', 'locked', 80, 'active',
-         NOW() - make_interval(months => off_mo),
-         NOW() - INTERVAL '1 hour',
-         NOW() - make_interval(months => off_mo),
-         NOW() - INTERVAL '1 hour'
-    FROM unnest(ARRAY[9, 6, 3]) WITH ORDINALITY AS t(off_mo, idx);
-
-  -- Brookline (BlueWave): 4 devices, 7/5/3/1 months ago
-  INSERT INTO devices (company_id, reseller_company_id, device_id, device_type, firmware_version,
-                       device_name, location, status, door_state, battery_percent, power_mode,
-                       created_at, updated_at, assigned_at, last_seen)
-  SELECT eu_brookline, reseller_bluewave,
-         'OMO-BROK' || lpad(idx::text, 6, '0'),
-         'sb6', '1.4.2',
-         'Brookline Door ' || idx, 'Floor ' || idx,
-         'online', 'locked', 75, 'active',
-         NOW() - make_interval(months => off_mo),
-         NOW() - INTERVAL '1 hour',
-         NOW() - make_interval(months => off_mo),
-         NOW() - INTERVAL '2 hours'
-    FROM unnest(ARRAY[7, 5, 3, 1]) WITH ORDINALITY AS t(off_mo, idx);
-
-  -- Meridian (BlueWave): 5 devices, 5/3/2/1/0 months ago (the breakout)
-  INSERT INTO devices (company_id, reseller_company_id, device_id, device_type, firmware_version,
-                       device_name, location, status, door_state, battery_percent, power_mode,
-                       created_at, updated_at, assigned_at, last_seen)
-  SELECT eu_meridian, reseller_bluewave,
-         'OMO-MERI' || lpad(idx::text, 6, '0'),
-         'sb6', '1.4.2',
-         'Meridian Room ' || idx, 'Hotel ' || idx,
-         'online', 'locked', 88, 'active',
-         NOW() - make_interval(months => off_mo),
-         NOW() - INTERVAL '1 hour',
-         NOW() - make_interval(months => off_mo),
-         NOW() - INTERVAL '30 minutes'
-    FROM unnest(ARRAY[5, 3, 2, 1, 0]) WITH ORDINALITY AS t(off_mo, idx);
-
-  -- Aurora (Lockwise): 2 devices, 3/1 months ago
-  INSERT INTO devices (company_id, reseller_company_id, device_id, device_type, firmware_version,
-                       device_name, location, status, door_state, battery_percent, power_mode,
-                       created_at, updated_at, assigned_at, last_seen)
-  SELECT eu_aurora, reseller_lockwise,
-         'OMO-AURO' || lpad(idx::text, 6, '0'),
-         'sb6', '1.4.2',
-         'Aurora Lab ' || idx, 'Wing ' || idx,
-         'online', 'locked', 70, 'active',
-         NOW() - make_interval(months => off_mo),
-         NOW() - INTERVAL '1 hour',
-         NOW() - make_interval(months => off_mo),
-         NOW() - INTERVAL '5 minutes'
-    FROM unnest(ARRAY[3, 1]) WITH ORDINALITY AS t(off_mo, idx);
-
-  -- Direct end-users (no reseller): small flat baseline
-  -- Hollow Pine Yoga: 2 devices, 11/8 months ago
-  INSERT INTO devices (company_id, device_id, device_type, firmware_version,
-                       device_name, location, status, door_state, battery_percent, power_mode,
-                       created_at, updated_at, assigned_at, last_seen)
-  SELECT eu_yoga,
-         'OMO-YOGA' || lpad(idx::text, 6, '0'),
-         'sb6', '1.4.2',
-         'Yoga Door ' || idx, 'Studio ' || idx,
-         'online', 'locked', 65, 'active',
-         NOW() - make_interval(months => off_mo),
-         NOW() - INTERVAL '1 hour',
-         NOW() - make_interval(months => off_mo),
-         NOW() - INTERVAL '4 hours'
-    FROM unnest(ARRAY[11, 8]) WITH ORDINALITY AS t(off_mo, idx);
-
-  -- GraniteBank: 1 device, 4 months ago
-  INSERT INTO devices (company_id, device_id, device_type, firmware_version,
-                       device_name, location, status, door_state, battery_percent, power_mode,
-                       created_at, updated_at, assigned_at, last_seen)
-  VALUES (eu_bank, 'OMO-BANK000001', 'sb6', '1.4.2',
-          'Vault Anteroom', 'Main branch', 'online', 'locked', 92, 'active',
-          NOW() - INTERVAL '4 months',
-          NOW() - INTERVAL '1 hour',
-          NOW() - INTERVAL '4 months',
-          NOW() - INTERVAL '6 hours');
-
-  RAISE NOTICE 'Seed complete: % companies (incl. 3 resellers, 7 end-users), % devices total, % credentials, ~23 events.',
+  RAISE NOTICE 'Seed complete: % companies (platform, 2 resellers, 2 end-users), % devices (the 3 Simkura sandbox fixtures), % credentials, ~23 events.',
     (SELECT COUNT(*) FROM companies),
     (SELECT COUNT(*) FROM devices),
     (SELECT COUNT(*) FROM credentials);
