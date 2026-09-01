@@ -10,10 +10,12 @@
  * bcrypt-compare the full submitted token. The plaintext leaves the
  * server exactly once — at creation time.
  *
- * Available scopes (extend as we open more /api/external endpoints):
- *   ping            — verify the key is valid (the demo endpoint)
- *   read:companies  — list companies
- *   read:devices    — fleet view
+ * Available scopes: just `ping` out of the box. The platform deliberately
+ * ships no other /api/external endpoints — the API-key + scope machinery is
+ * the extension point, and deployments add the endpoints their integrations
+ * actually need. To open one: mount the route in routes/external/ behind
+ * requireScope('<scope>'), add the scope here, and add its entry to the
+ * catalog in apps/web/src/pages/app/apiCatalog.ts in the same change.
  */
 
 const crypto = require('crypto');
@@ -27,7 +29,7 @@ const SECRET_BYTES = 18;  // ~24 url-safe chars
 const TOKEN_PREFIX = 'ldn_live_';
 const BCRYPT_ROUNDS = 10;
 
-const ALLOWED_SCOPES = ['ping', 'read:companies', 'read:devices'];
+const ALLOWED_SCOPES = ['ping'];
 
 function urlSafeBase64(buf) {
   return buf.toString('base64')

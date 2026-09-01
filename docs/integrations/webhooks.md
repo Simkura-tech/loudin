@@ -71,6 +71,7 @@ a failure and retried.
 |--------------|---------------|------------|
 | `company.signed_up` | — | a company self-registers |
 | `company.first_person_added` | `person.person_id` | the company's first credential holder is created |
+| `company.subscription_cancelled` | — | a scheduled company cancellation is processed |
 | `device.added` | `device.device_id` | a device is claimed |
 | `device.removed` | `device.device_id` | a device is released |
 | `device.offline_extended` | `device.{ device_id, last_seen, offline_hours }` | a claimed device hasn't been seen for `SIMKURA_OFFLINE_ALERT_HOURS` (default 48) — once per offline episode |

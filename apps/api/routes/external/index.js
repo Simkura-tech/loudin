@@ -3,9 +3,13 @@
  * (`Authorization: Bearer ldn_live_…`), never by user session. A leaked
  * key can never act as a logged-in user (see middleware/core/apiKeyAuth.js).
  *
- * The endpoint catalog shown in the platform UI lives at
- * apps/web/src/pages/app/apiCatalog.ts — when adding a route here, add or
- * flip its catalog entry to 'live' in the same change.
+ * Deliberately minimal: `ping` is the only endpoint the platform ships.
+ * The auth/scope machinery here is the extension point — add the routes
+ * your integration actually needs. When you do: (1) add the scope to
+ * services/platform/apiKey.js ALLOWED_SCOPES, and (2) add or flip the
+ * catalog entry in apps/web/src/pages/app/apiCatalog.ts to 'live' in the
+ * same change, so the API access page never advertises something the API
+ * doesn't serve.
  */
 
 const express = require('express');
