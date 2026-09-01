@@ -43,13 +43,19 @@
  * so we assign slot numbers 1..N in push order and bind the schedule to the
  * same slots — DB ids never reach the firmware.
  *
- * Stamping model (see migration 058):
- *   * applied_at    set when the junction row was created/updated
- *   * submitted_at  STAMPED HERE on Simkura's 202 (command queued)
- *   * synced_at     STAMPED HERE alongside submitted_at — v2 does not yet
- *                   correlate device-level acknowledgement to command
- *                   records (an 'acknowledged' status is planned upstream);
- *                   until then the 202 is the best confirmation available
+ * Stamping model (see migrations 058 + 084):
+ *   * applied_at          set when the junction row was created/updated
+ *   * submitted_at        STAMPED HERE on Simkura's 202 (command queued),
+ *                         together with simkura_command_id — the `cmd_…`
+ *                         id from the 202 record
+ *   * synced_at           stamped by services/access/commandAck when the
+ *                         matching command.sent webhook (data.commandRef)
+ *                         arrives, or when the state-sync reconcile sees the
+ *                         record reach status 'sent'. A failed / expired
+ *                         record clears submitted_at so the next push
+ *                         re-sends the row. (A 202 with no record id has
+ *                         nothing to correlate — synced_at is stamped at
+ *                         submit time, the pre-084 behaviour.)
  *
  * No transaction: each Simkura call is an independent HTTP round trip and
  * cannot be rolled back. On failure we stop the sequence, keep whatever
@@ -218,13 +224,29 @@ const ACTIVE_SHIFTS_SQL = `
      AND s.deleted_at IS NULL
    ORDER BY s.id`;
 
-async function stampSubmitted(table, junctionIds) {
-  if (junctionIds.length === 0) return;
+/**
+ * Stamp accepted adds: submitted_at now, plus the command id that the
+ * webhook / reconcile path later matches to stamp synced_at. `entries` is
+ * [{ junctionId, commandId }]; a null commandId (no record in the 202) has
+ * nothing to correlate, so synced_at is stamped immediately as before.
+ */
+async function stampSubmitted(table, entries) {
+  if (entries.length === 0) return;
   await query(
-    `UPDATE ${table} SET submitted_at = NOW(), synced_at = NOW()
-      WHERE id = ANY($1::int[])`,
-    [junctionIds]
+    `UPDATE ${table} AS t
+        SET submitted_at       = NOW(),
+            simkura_command_id = v.command_id,
+            synced_at          = CASE WHEN v.command_id IS NULL THEN NOW() ELSE NULL END
+       FROM unnest($1::int[], $2::text[]) AS v(id, command_id)
+      WHERE t.id = v.id`,
+    [entries.map((e) => e.junctionId), entries.map((e) => e.commandId ?? null)]
   );
+}
+
+/** The 202 record's id, when Simkura returned one. */
+function commandIdOf(r) {
+  const id = r?.record?.id;
+  return typeof id === 'string' && id ? id : null;
 }
 
 /**
@@ -376,7 +398,7 @@ async function delta({ deviceId, hwId, sequence, fire, simkura }) {
     }
     const r = await fire('credentials.add', () => simkura.addCredential(hwId, DOOR, body));
     if (!r.ok) { addFailure = r.detail; break; }
-    submittedCreds.push(c.junction_id);
+    submittedCreds.push({ junctionId: c.junction_id, commandId: commandIdOf(r) });
   }
   await stampSubmitted('device_credentials', submittedCreds);
   if (addFailure) return { ok: false, hwId, mode: 'delta', sequence, error: addFailure };
@@ -405,7 +427,7 @@ async function delta({ deviceId, hwId, sequence, fire, simkura }) {
       const slot = idx + 1; // firmware slot, not DB id — see header
       const r = await fire('shifts.add', () => simkura.addShift(hwId, DOOR, shiftAddBody(s, slot)));
       if (!r.ok) { shiftFailure = r.detail; break; }
-      submittedShiftJunctions.push(s.junction_id);
+      submittedShiftJunctions.push({ junctionId: s.junction_id, commandId: commandIdOf(r) });
       slots.push(slot);
     }
     await stampSubmitted('device_shifts', submittedShiftJunctions);
@@ -483,7 +505,7 @@ async function rebuild({ deviceId, hwId, sequence, fire, simkura }) {
     }
     const r = await fire('credentials.add', () => simkura.addCredential(hwId, DOOR, body));
     if (!r.ok) { credFailure = r.detail; break; }
-    submittedCredJunctions.push(c.junction_id);
+    submittedCredJunctions.push({ junctionId: c.junction_id, commandId: commandIdOf(r) });
   }
   await stampSubmitted('device_credentials', submittedCredJunctions);
   if (credFailure) return { ok: false, hwId, mode: 'rebuild', sequence, error: credFailure };
@@ -496,7 +518,7 @@ async function rebuild({ deviceId, hwId, sequence, fire, simkura }) {
     const slot = idx + 1;
     const r = await fire('shifts.add', () => simkura.addShift(hwId, DOOR, shiftAddBody(s, slot)));
     if (!r.ok) { shiftFailure = r.detail; break; }
-    submittedShiftJunctions.push(s.junction_id);
+    submittedShiftJunctions.push({ junctionId: s.junction_id, commandId: commandIdOf(r) });
     slots.push(slot);
   }
   await stampSubmitted('device_shifts', submittedShiftJunctions);

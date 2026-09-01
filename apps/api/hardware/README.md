@@ -26,8 +26,8 @@ optional per-reseller overrides via `companies.simkura_api_key` /
 const simkura = require('../hardware/simkura');
 
 if (simkura.client.isAvailable()) {
-  const state = await simkura.client.getDeviceState(hardwareDeviceId);
-  await simkura.client.publishCommand(hardwareDeviceId, 'bwUnlock', {});
+  const device = await simkura.client.getDevice(hardwareDeviceId); // v2 resource, state embedded
+  const queued = await simkura.client.unlockDoor(hardwareDeviceId); // 202 → { id: 'cmd_…', status: 'queued', … }
 }
 ```
 

@@ -193,10 +193,10 @@ async function get(req, res, next) {
 
     // Pull both junctions' sync counts in one round trip. Three states:
     //   add       — active row that's not yet submitted to the firmware
-    //   submitted — accepted by Simkura (202), device hasn't confirmed yet
-    //               (NB: v2 doesn't correlate device acks to command records
-    //                yet — an 'acknowledged' status is planned upstream — so
-    //                for cred/shift this is effectively "pushed")
+    //   submitted — accepted by Simkura (202); synced_at lands when the
+    //               matching command.sent webhook (data.commandRef) arrives
+    //               or the state-sync reconcile sees the record 'sent' —
+    //               see services/access/commandAck.js
     //   remove    — soft-deleted, firmware still has it cached
     const [{ rows: [credCounts] }, { rows: [shiftCounts] }] = await Promise.all([
       query(

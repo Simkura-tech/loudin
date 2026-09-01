@@ -6,20 +6,25 @@
  * specific device. Tenant-scoped: both the device and the credential must
  * belong to the caller's company.
  *
- * Sync model (added in migration 041):
- *   deleted_at IS NULL, synced_at IS NULL          → pending addition
- *   deleted_at IS NULL, synced_at IS NOT NULL      → in sync
+ * Sync model (migrations 041 / 058 / 084):
+ *   deleted_at IS NULL, submitted_at IS NULL       → pending addition
+ *   deleted_at IS NULL, submitted_at IS NOT NULL,
+ *                       synced_at IS NULL          → pushed; Simkura queued
+ *                                                     the add, device hasn't
+ *                                                     received it yet
+ *   deleted_at IS NULL, synced_at IS NOT NULL      → in sync (delivered)
  *   deleted_at IS NOT NULL                          → pending removal
- *                                                     (firmware still has it
- *                                                     cached; "Update device"
- *                                                     will fire deactivate
- *                                                     then hard-delete the
- *                                                     row.)
+ *                                                     (firmware has — or is
+ *                                                     about to get — it;
+ *                                                     "Update device" fires
+ *                                                     the remove then hard-
+ *                                                     deletes the row.)
  *
- * Detach semantics: if a row was never synced (synced_at IS NULL), we
- * hard-delete it directly — the firmware never knew about it, so there's
- * nothing to deactivate. If it was synced, we soft-delete (deleted_at set)
- * so the next "Update device" push knows to deactivate it.
+ * Detach semantics: if a row was never submitted, we hard-delete it
+ * directly — the firmware never knew about it, so there's nothing to
+ * remove. Once it has been submitted (queued in Simkura, delivered or
+ * not) we soft-delete (deleted_at set) so the next "Update device" push
+ * removes it from the lock.
  */
 
 const { query } = require('../../database/db');
@@ -128,6 +133,15 @@ async function list(req, res, next) {
 // If a previously-soft-deleted (pending-removal) row exists, we revive it
 // instead of inserting a new row — cancelling the pending removal in one
 // step. Otherwise we INSERT. 409 if the row is already active.
+//
+// Reviving must ONLY clear deleted_at. The sync stamps (applied_at /
+// submitted_at / synced_at / simkura_command_id) describe what the lock
+// already holds, and the removal was never sent — so the row is still in
+// sync (or still awaiting its original delivery) and nothing needs pushing.
+// Resetting the stamps would make the next push re-send credentials.add,
+// and the firmware appends without checking for an existing record: the
+// lock ends up with two copies, and a later credentials.remove only deletes
+// one — the card keeps opening the door after Loudin shows it removed.
 async function attach(req, res, next) {
   try {
     const device = await loadDeviceForCaller(req);
@@ -156,13 +170,10 @@ async function attach(req, res, next) {
     }
 
     // Step 2: revive a soft-deleted row if one exists (cancels pending
-    // removal); otherwise INSERT a fresh one.
+    // removal — stamps untouched, see note above); otherwise INSERT.
     const undeleted = await query(
       `UPDATE device_credentials
-          SET deleted_at   = NULL,
-              applied_at   = NOW(),
-              submitted_at = NULL,
-              synced_at    = NULL
+          SET deleted_at = NULL
         WHERE device_id = $1 AND credential_id = $2 AND deleted_at IS NOT NULL
       RETURNING id`,
       [device.id, credentialId]
@@ -201,23 +212,25 @@ async function detach(req, res, next) {
       return badRequest(res, 'credential id must be a positive integer');
     }
 
-    // Synced-and-active rows become pending removals.
+    // Rows the lock holds — or has been queued to receive — become pending
+    // removals.
     const softDel = await query(
       `UPDATE device_credentials
           SET deleted_at = NOW()
         WHERE device_id = $1 AND credential_id = $2
           AND deleted_at IS NULL
-          AND synced_at IS NOT NULL`,
+          AND (submitted_at IS NOT NULL OR synced_at IS NOT NULL)`,
       [device.id, credentialId]
     );
     if (softDel.rowCount > 0) return res.status(204).end();
 
-    // Never-synced active rows get hard-deleted — firmware never received
-    // them, so there's nothing to deactivate.
+    // Never-submitted active rows get hard-deleted — firmware never received
+    // them, so there's nothing to remove.
     const hardDel = await query(
       `DELETE FROM device_credentials
         WHERE device_id = $1 AND credential_id = $2
           AND deleted_at IS NULL
+          AND submitted_at IS NULL
           AND synced_at IS NULL`,
       [device.id, credentialId]
     );
@@ -231,9 +244,9 @@ async function detach(req, res, next) {
 
 /**
  * Detach a set of credentials from a device using the same soft/hard rules
- * as single detach: synced rows become pending removals (deactivated on the
- * next push); never-synced rows are hard-deleted (the firmware never got
- * them). Returns how many junction rows were affected.
+ * as single detach: submitted or synced rows become pending removals
+ * (removed on the next push); never-submitted rows are hard-deleted (the
+ * firmware never got them). Returns how many junction rows were affected.
  */
 async function detachMany(deviceId, credentialIds) {
   if (credentialIds.length === 0) return 0;
@@ -243,7 +256,7 @@ async function detachMany(deviceId, credentialIds) {
       WHERE device_id = $1
         AND credential_id = ANY($2::int[])
         AND deleted_at IS NULL
-        AND synced_at IS NOT NULL`,
+        AND (submitted_at IS NOT NULL OR synced_at IS NOT NULL)`,
     [deviceId, credentialIds]
   );
   const { rowCount: hardCount } = await query(
@@ -251,6 +264,7 @@ async function detachMany(deviceId, credentialIds) {
       WHERE device_id = $1
         AND credential_id = ANY($2::int[])
         AND deleted_at IS NULL
+        AND submitted_at IS NULL
         AND synced_at IS NULL`,
     [deviceId, credentialIds]
   );
@@ -397,16 +411,14 @@ async function attachByPerson(req, res, next) {
     );
     const activeIds = new Set(activeRows.map((r) => r.credential_id));
 
-    // Revive any soft-deleted rows for the remaining credentials.
+    // Revive any soft-deleted rows for the remaining credentials (stamps
+    // untouched — see the note above attach()).
     const reviveCandidates = credIds.filter((id) => !activeIds.has(id));
     let revivedIds = [];
     if (reviveCandidates.length > 0) {
       const { rows: revived } = await query(
         `UPDATE device_credentials
-            SET deleted_at   = NULL,
-                applied_at   = NOW(),
-                submitted_at = NULL,
-                synced_at    = NULL
+            SET deleted_at = NULL
           WHERE device_id = $1
             AND credential_id = ANY($2::int[])
             AND deleted_at IS NOT NULL
@@ -504,16 +516,14 @@ async function attachByGroup(req, res, next) {
     );
     const activeIds = new Set(activeRows.map((r) => r.credential_id));
 
-    // Revive any soft-deleted rows.
+    // Revive any soft-deleted rows (stamps untouched — see the note above
+    // attach()).
     const reviveCandidates = credIds.filter((id) => !activeIds.has(id));
     let revivedIds = [];
     if (reviveCandidates.length > 0) {
       const { rows: revived } = await query(
         `UPDATE device_credentials
-            SET deleted_at   = NULL,
-                applied_at   = NOW(),
-                submitted_at = NULL,
-                synced_at    = NULL
+            SET deleted_at = NULL
           WHERE device_id = $1
             AND credential_id = ANY($2::int[])
             AND deleted_at IS NOT NULL

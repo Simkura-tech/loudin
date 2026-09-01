@@ -17,6 +17,7 @@ const express = require('express');
 const crypto  = require('crypto');
 const { query } = require('../database/db');
 const events  = require('../integrations/events');
+const commandAck = require('../services/access/commandAck');
 
 const router = express.Router();
 
@@ -251,8 +252,12 @@ async function emitBatteryTransition(type, hwId, companyId, batteryPct) {
  *   device.reconnect/restart   → liveness bump
  *   access.granted/denied      → liveness bump (guaranteed events — persisted
  *                                on-device, delivered on next check-in)
- *   command.sent               → liveness bump (device confirmed)
- *   command.failed             → no device mutation (queue/Simkura issue)
+ *   command.sent               → liveness bump; data.commandRef (the id from
+ *                                the push's 202) confirms the matching
+ *                                credential/shift rows as delivered
+ *                                (services/access/commandAck)
+ *   command.failed             → no device mutation; data.commandRef un-submits
+ *                                the matching rows so the next push re-sends
  *   health.battery_low/dead/
  *     recovered                → battery_health ('low'/'dead'/'ok') + batteryPct
  *                                when carried; dead/recovered also relay to
@@ -325,9 +330,20 @@ async function applyEventToDeviceState(payload, companyId = null) {
       }
       return;
     }
+    case 'command.sent':
+      // Shape A (queue dispatch) carries commandRef — the id from the push's
+      // 202 — so the junction rows that command queued can be confirmed as
+      // delivered. Shape B (device-side confirmation) has no ref: liveness only.
+      await bumpLiveness(hwId);
+      if (data.commandRef) await commandAck.markSent(data.commandRef);
+      return;
+    case 'command.failed':
+      // The queue gave up (device unreachable, retries exhausted): the record
+      // never reached the lock. Roll the rows back to "pending add".
+      if (data.commandRef) await commandAck.markFailed(data.commandRef);
+      return;
     case 'device.reconnect':
     case 'device.restart':
-    case 'command.sent':
     case 'access.granted':
     case 'access.denied':
     case 'health.reader_wedged':

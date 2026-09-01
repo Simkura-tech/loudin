@@ -34,6 +34,10 @@
  * battery + firmware fresh and is the only path that can mark a device
  * OFFLINE — webhooks by definition only arrive from devices that are up.
  *
+ * Each refresh also reconciles pushed-but-unconfirmed junction rows against
+ * Simkura's command records (services/access/commandAck) — the fallback for
+ * the command.sent / command.failed webhooks.
+ *
  * Devices the platform credentials can't see (another account's, or deleted
  * upstream) return 403/404 — skipped quietly, everything else is logged.
  *
@@ -48,6 +52,7 @@
 const { client: simkuraClient } = require('./');
 const { query } = require('../../database/db');
 const events = require('../../integrations/events');
+const commandAck = require('../../services/access/commandAck');
 
 const INTERVAL_MS    = parseInt(process.env.SIMKURA_STATE_SYNC_INTERVAL_MS, 10) || 10 * 60 * 1000;
 const ENABLED        = process.env.SIMKURA_STATE_SYNC_ENABLED !== 'false';
@@ -155,7 +160,7 @@ async function refreshDevice(hwId) {
 
   let state;
   try {
-    state = await simkuraClient.getDeviceState(hwId);
+    state = await simkuraClient.getDevice(hwId);
   } catch (err) {
     const status = err.response?.status;
     if (status === 403 || status === 404) return 'skipped';
@@ -186,6 +191,20 @@ async function refreshDevice(hwId) {
       WHERE device_id = $1 AND deleted_at IS NULL`,
     params
   );
+
+  // Close the loop on pushes still awaiting delivery confirmation. The
+  // command.sent webhook (data.commandRef) is the primary path; this covers
+  // deployments without a registered webhook and any missed delivery. Only
+  // costs a request when something is actually outstanding.
+  try {
+    const ack = await commandAck.reconcile(hwId, simkuraClient);
+    if (ack.sent > 0 || ack.failed > 0) {
+      console.log(`[simkura-state] ${hwId}: reconciled ${ack.sent} sent, ${ack.failed} failed command(s)`);
+    }
+  } catch (err) {
+    console.warn('[simkura-state] command reconcile failed for', hwId, '—', err.message);
+  }
+
   return 'updated';
 }
 

@@ -157,4 +157,115 @@ describe('Simkura webhooks — receiver', () => {
     assert.equal(rows[0].n, 1);
     assert.equal((await deviceRow()).door_state, beforeRow.door_state);
   });
+
+  // ── Command correlation (migration 084 / services/access/commandAck) ──────
+
+  /** First active credential junction on the test device, with its stamps
+   *  so the test can put them back. */
+  async function pushedJunction() {
+    const { rows: [j] } = await query(
+      `SELECT dc.id, dc.submitted_at, dc.synced_at, dc.simkura_command_id
+         FROM device_credentials dc
+         JOIN devices d ON d.id = dc.device_id
+        WHERE d.device_id = $1 AND dc.deleted_at IS NULL
+        ORDER BY dc.id LIMIT 1`, [hwId]);
+    assert.ok(j, 'seed attaches at least one credential to the device');
+    return j;
+  }
+  const stampSubmitted = (id, ref) => query(
+    `UPDATE device_credentials
+        SET submitted_at = NOW(), synced_at = NULL, simkura_command_id = $2
+      WHERE id = $1`, [id, ref]);
+  const junctionRow = async (id) => (await query(
+    `SELECT submitted_at, synced_at, simkura_command_id FROM device_credentials WHERE id = $1`, [id])).rows[0];
+  const restore = (j) => query(
+    `UPDATE device_credentials
+        SET submitted_at = $2, synced_at = $3, simkura_command_id = $4
+      WHERE id = $1`, [j.id, j.submitted_at, j.synced_at, j.simkura_command_id]);
+
+  test('command.sent with a matching commandRef stamps synced_at; command.failed rolls the row back', async () => {
+    const j = await pushedJunction();
+    try {
+      const ref = `cmd_test_${Date.now()}`;
+      await stampSubmitted(j.id, ref);
+
+      // A dashboard test event must never confirm a real push.
+      await insertEvent({ event_type: 'command.sent', event_id: eid(), device_id: hwId, isTest: true,
+        data: { commandRef: ref, operation: 'credentials.add' } });
+      assert.equal((await junctionRow(j.id)).synced_at, null, 'isTest must not stamp');
+
+      // Shape B (device-side confirmation) carries no ref — liveness only.
+      await insertEvent({ event_type: 'command.sent', event_id: eid(), device_id: hwId,
+        data: { code: 1, timestamp: new Date().toISOString() } });
+      assert.equal((await junctionRow(j.id)).synced_at, null, 'no ref, no stamp');
+
+      // A ref for some other command leaves this row alone.
+      await insertEvent({ event_type: 'command.sent', event_id: eid(), device_id: hwId,
+        data: { commandRef: `${ref}_other`, operation: 'credentials.add' } });
+      assert.equal((await junctionRow(j.id)).synced_at, null, 'unrelated ref, no stamp');
+
+      // Shape A (queue dispatch) with the matching ref → delivered.
+      await insertEvent({ event_type: 'command.sent', event_id: eid(), device_id: hwId,
+        data: { commandId: 1234, commandType: 'bwCred', operation: 'credentials.add', commandRef: ref } });
+      const sent = await junctionRow(j.id);
+      assert.ok(sent.synced_at, 'matching commandRef stamps synced_at');
+      assert.equal(sent.simkura_command_id, ref, 'the id is kept for the audit trail');
+
+      // A later failure on a fresh submission → back to "pending add".
+      const ref2 = `${ref}_retry`;
+      await stampSubmitted(j.id, ref2);
+      await insertEvent({ event_type: 'command.failed', event_id: eid(), device_id: hwId,
+        data: { commandRef: ref2, operation: 'credentials.add', error: 'Device offline; retries exhausted' } });
+      const failed = await junctionRow(j.id);
+      assert.equal(failed.submitted_at, null);
+      assert.equal(failed.synced_at, null);
+      assert.equal(failed.simkura_command_id, null);
+    } finally {
+      await restore(j);
+    }
+  });
+
+  test('reconcile resolves outstanding command ids against the v2 command records', async () => {
+    const { reconcile } = require('../services/access/commandAck');
+    const j = await pushedJunction();
+    const notFound = () => { throw Object.assign(new Error('not found'), { response: { status: 404 } }); };
+    try {
+      // Nothing outstanding → no upstream call at all.
+      await query(`UPDATE device_credentials SET submitted_at = NULL, synced_at = NULL, simkura_command_id = NULL WHERE id = $1`, [j.id]);
+      const idle = await reconcile(hwId, { listCommands: async () => { throw new Error('must not be called'); } });
+      assert.deepEqual(idle, { pending: 0, sent: 0, failed: 0 });
+
+      // Record on the first history page as 'sent' → delivered.
+      const ref = `cmd_test_${Date.now()}`;
+      await stampSubmitted(j.id, ref);
+      const r1 = await reconcile(hwId, {
+        listCommands: async () => [{ id: 'cmd_someone_else', status: 'sent' }, { id: ref, status: 'sent' }],
+        getCommand:   async () => notFound(),
+      });
+      assert.equal(r1.sent, 1);
+      assert.ok((await junctionRow(j.id)).synced_at);
+
+      // Still in flight → left alone.
+      await stampSubmitted(j.id, ref);
+      const r2 = await reconcile(hwId, { listCommands: async () => [{ id: ref, status: 'queued' }], getCommand: async () => notFound() });
+      assert.deepEqual(r2, { pending: 1, sent: 0, failed: 0 });
+      assert.equal((await junctionRow(j.id)).synced_at, null);
+
+      // Not on the page, individual lookup says expired → rolled back for re-send.
+      const r3 = await reconcile(hwId, {
+        listCommands: async () => [],
+        getCommand:   async (_hw, id) => ({ id, status: 'expired' }),
+      });
+      assert.equal(r3.failed, 1);
+      assert.equal((await junctionRow(j.id)).submitted_at, null);
+
+      // Unknown upstream (404) → untouched, never re-sent on a guess.
+      await stampSubmitted(j.id, ref);
+      const r4 = await reconcile(hwId, { listCommands: async () => [], getCommand: async () => notFound() });
+      assert.deepEqual(r4, { pending: 1, sent: 0, failed: 0 });
+      assert.ok((await junctionRow(j.id)).submitted_at);
+    } finally {
+      await restore(j);
+    }
+  });
 });

@@ -232,11 +232,11 @@ async function update(req, res, next) {
 }
 
 // ── DELETE /api/devices/:id/shifts/:shiftId ───────────────────────────────────
-// If the junction was synced to the device firmware (synced_at IS NOT NULL),
-// soft-delete it so the next "Update device" push fires a deactivate
-// command. If it was never synced, hard-delete — firmware doesn't know
-// about it, no deactivate needed. The underlying `shifts` row is also
-// soft-deleted so it disappears from any future picker.
+// If the junction was submitted to Simkura (queued for — or already on —
+// the device firmware), soft-delete it so the next "Update device" push
+// rebuilds the shift table without it. If it was never submitted,
+// hard-delete — firmware doesn't know about it. The underlying `shifts` row
+// is also soft-deleted so it disappears from any future picker.
 async function destroy(req, res, next) {
   try {
     const device = await loadDeviceForCaller(req);
@@ -244,7 +244,7 @@ async function destroy(req, res, next) {
 
     const shiftId = Number(req.params.shiftId);
     const { rows: linkedRows } = await query(
-      `SELECT id, synced_at FROM device_shifts
+      `SELECT id, submitted_at, synced_at FROM device_shifts
         WHERE device_id = $1 AND shift_id = $2 AND deleted_at IS NULL
         LIMIT 1`,
       [device.id, shiftId]
@@ -252,9 +252,9 @@ async function destroy(req, res, next) {
     if (linkedRows.length === 0) {
       return res.status(404).json({ error: 'Not Found', message: 'Shift not found on this device' });
     }
-    const wasSynced = linkedRows[0].synced_at != null;
+    const onLock = linkedRows[0].submitted_at != null || linkedRows[0].synced_at != null;
 
-    if (wasSynced) {
+    if (onLock) {
       await query(
         `UPDATE device_shifts
             SET deleted_at = NOW()

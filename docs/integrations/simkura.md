@@ -94,8 +94,10 @@ activity feed can show *who* opened the door.
 | `device.sleep` | `power_mode='sleep'` |
 | `device.online` / `device.offline` | Platform-derived reachability edges → `status` (offline deliberately does **not** touch `last_seen`, so the offline-alert sweep still measures true staleness) |
 | `health.battery_low` / `battery_dead` / `battery_recovered` | Updates `battery_health` (+ `battery_percent` when carried); dead/recovered also relay to Loudin's [outbound webhooks](./webhooks.md) as `device.battery_dead` / `device.battery_recovered` |
-| `device.reconnect`, `device.restart`, `access.granted`, `access.denied`, `command.sent`, `health.reader_wedged`, `health.recovery_boot` | Liveness bump (`last_seen`) |
-| `command.failed`, `device.deployed` / `undeployed` | Stored only — no device mutation |
+| `command.sent` | Liveness bump; when `data.commandRef` matches a pushed credential/shift row, stamps its `synced_at` — the command reached the device (see [sync trail](#pushing-credentials--schedules)) |
+| `command.failed` | No device mutation; `data.commandRef` clears `submitted_at` on the matching row so the next push re-sends it |
+| `device.reconnect`, `device.restart`, `access.granted`, `access.denied`, `health.reader_wedged`, `health.recovery_boot` | Liveness bump (`last_seen`) |
+| `device.deployed` / `undeployed` | Stored only — no device mutation |
 | anything else | Stored for the event feed; no device mutation (new Simkura event types need no migration) |
 
 Synthetic test events (fired from the Simkura dashboard, marked
@@ -122,8 +124,11 @@ Both run inline in the API process (started from `server.js`):
   counts). Multi-door devices are mirrored as door 1 only for now. This
   poll is the **only** path that can mark a device offline — webhooks only
   arrive from live devices. `last_seen` never moves backwards (webhooks and
-  polls both bump it). Also refreshed on demand when a device detail page
-  loads. Disable: `SIMKURA_STATE_SYNC_ENABLED=false`.
+  polls both bump it). Each refresh also reconciles pushed-but-unconfirmed
+  credential/shift rows against the device's v2 command records — the
+  fallback for the `command.sent` / `command.failed` webhooks (only costs a
+  request when something is outstanding). Also refreshed on demand when a
+  device detail page loads. Disable: `SIMKURA_STATE_SYNC_ENABLED=false`.
 
 An **offline alert sweep** rides along with state sync: a claimed device
 unseen for `SIMKURA_OFFLINE_ALERT_HOURS` (default 48) emits one
@@ -176,10 +181,19 @@ steps are kept and the next push resumes; already-delivered credentials are
 never re-sent (firmware has no upsert).
 
 Junction rows carry a three-stage sync trail: `applied_at` (recorded in
-Loudin) → `submitted_at` (accepted by Simkura) → `synced_at` (confirmed on
-device). The device's own firmware-reported counts
-(`fw_credential_count` etc., from state sync) are the ground truth for
-verifying what a lock actually holds.
+Loudin) → `submitted_at` (accepted by Simkura — the row also stores the
+`cmd_…` id from the 202 as `simkura_command_id`) → `synced_at` (delivered to
+the device: the `command.sent` webhook whose `data.commandRef` matches that
+id, or the state-sync reconcile seeing the record reach `sent`). A `failed`
+/ `expired` command clears `submitted_at` so the next push re-sends the row;
+the device page shows "Pushed; device confirmation pending" in between.
+Detaching a row that has been submitted — delivered or not — always queues
+a remove, since the lock has or will get the record. Re-attaching it before
+the push simply cancels that removal — the row keeps its stamps and nothing
+is re-sent, because the firmware appends duplicates on a repeated
+`credentials.add` and a later remove would only delete one copy. The device's own
+firmware-reported counts (`fw_credential_count` etc., from state sync)
+remain the ground truth for verifying what a lock actually holds.
 
 Ad-hoc commands (`POST /api/devices/:hardware_id/commands`) accept an
 allowlisted subset: `lock.unlock`, `lock.set-state` (locked / unlocked /

@@ -214,14 +214,6 @@ class SimkuraClient {
     return r.data;
   }
 
-  /**
-   * v1 compatibility alias — v2 embeds state in the device resource, so
-   * "state" and "device" are the same fetch now.
-   */
-  async getDeviceState(hardwareDeviceId) {
-    return this.getDevice(hardwareDeviceId);
-  }
-
   // ──────────────────────────────────────────────────────────────────────
   // Commands — v2 resource-style. Every command endpoint is async: a 202
   // returns a queued-command record { id: 'cmd_…', operation, door, status,
