@@ -4,7 +4,7 @@ Open-source access control management platform for IoT door locks.
 
 Loudin is a multi-tenant web application for managing smart door locks, the people who use them, and the credentials that open them. It works with [Simkura](https://simkura.com) lock hardware: device communication happens over the Simkura REST API — commands go out over HTTPS, and device state comes back via webhooks and polling. Loudin never talks to devices directly, so there is no MQTT broker or device firmware to operate.
 
-**Getting hardware:** Simkura locks and production API access are available at [simkura.com](https://simkura.com). You don't need hardware to evaluate Loudin — the app runs fully without it (device features sit inert), and a Simkura-hosted mock API for hardware-free device testing is planned.
+**Getting hardware:** Simkura locks and production API access are available at [simkura.com](https://simkura.com). You don't need hardware to evaluate Loudin — out of the box it points at [Simkura's public sandbox](https://docs.simkura.com/authentication/) (no signup), so device features work immediately against three fixture locks.
 
 **Who this is for:** self-hosters managing their own doors, and software providers / security integrators who want to run a branded access-control service for their customers without building a platform from scratch — see [white-labeling](#white-labeling) and [docs/deployment-shapes.md](./docs/deployment-shapes.md).
 
@@ -132,7 +132,7 @@ degrades predictably when unconfigured:
 |---|---|
 | **Resend** (`RESEND_API_KEY`) | No real emails are sent. In development, password-reset links, verification codes, and login OTPs are printed to the API console/log instead, so those flows remain testable. |
 | **Twilio** (`TWILIO_*`) | No SMS two-factor codes. Email-based 2FA still works. |
-| **Simkura** (`SIMKURA_API_URL` / `SIMKURA_API_KEY`) | Device features are inert: no device discovery, state sync, or lock commands (`/api/health/simkura` reports `not_configured`). The rest of the UI works normally. Credentials can also be configured at runtime from the platform-admin **API access → Integrations** tab, which overrides the env vars. A mock Simkura API for hardware-free local development is planned. |
+| **Simkura** (`SIMKURA_API_URL` / `SIMKURA_API_KEY`) | Defaults to [Simkura's public sandbox key](https://docs.simkura.com/authentication/) — read-only, three fixture devices, so discovery and state sync work with zero setup (lock *commands* need a real `sk_live_…` key). With no credentials at all, device features are inert (`/api/health/simkura` reports `not_configured`) and the rest of the UI works normally. Credentials can also be set at runtime from the platform-admin **API access → Integrations** tab, which overrides the env vars. |
 | **Google OAuth** (`GOOGLE_*`) | "Sign in with Google" is unavailable; email + password login still works. |
 
 The API validates required configuration at boot

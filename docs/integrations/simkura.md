@@ -10,10 +10,10 @@ connects to a device directly. Three channels:
 
 Integration code lives in [`apps/api/hardware/simkura/`](../../apps/api/hardware/simkura/).
 
-> **Status note:** the Simkura API is being reworked, and a Simkura-hosted
-> mock API (realistic test data, zero hardware) is planned for hardware-free
-> evaluation. This document describes the contract as currently implemented;
-> expect it to be updated when the rework lands.
+> **Status note:** Simkura's API is mid-transition from v1 (legacy, frozen)
+> to v2 (resource-style — see [docs.simkura.com](https://docs.simkura.com)).
+> Loudin's **reads run on v2**; **commands and webhook management remain on
+> v1** until Simkura's v2 command surface leaves draft, then migrate too.
 
 ---
 
@@ -22,7 +22,7 @@ Integration code lives in [`apps/api/hardware/simkura/`](../../apps/api/hardware
 | Variable | Purpose |
 |---|---|
 | `SIMKURA_API_URL` | Base URL of the Simkura API |
-| `SIMKURA_API_KEY` | Static API key, sent as `Authorization: Bearer …` on every call |
+| `SIMKURA_API_KEY` | Static API key, sent as `Authorization: Bearer …` on every call. Defaults to Simkura's **public sandbox key** (`sk_demo_simkura_sandbox` — read-only, three fixture devices, [documented here](https://docs.simkura.com/authentication/)); use your `sk_live_…` key for real hardware |
 | `SIMKURA_WEBHOOK_SECRET` | HMAC secret for verifying inbound webhooks (from webhook registration) |
 | `SIMKURA_API_TIMEOUT` | Per-request timeout, ms (default 10000) |
 | `SIMKURA_RETRY_MAX_ATTEMPTS` / `_BASE_DELAY_MS` / `_MAX_DELAY_MS` / `_JITTER_MS` | Retry tuning (defaults 3 / 1000 / 8000 / 500) |
@@ -44,22 +44,22 @@ API key surfaces as an instant 401, not a hung request.
 
 ## Device identity
 
-The canonical identifier everywhere is the **hardware `device_id`** (the
-serial printed on the device), never Simkura's internal row UUID. All REST
-paths below take the hardware id.
+The canonical identifier everywhere is Simkura's **`device.id`** — an opaque
+string (e.g. `nrf-352656…`) that matches the id in URLs and webhook
+payloads. Loudin stores it as `devices.device_id` and uses it in all REST
+paths below.
 
 ## Outbound REST calls
 
-Loudin calls these Simkura endpoints (`{base}/api/v1/…`):
+Reads use v2, commands and webhook management still v1:
 
 | Method & path | Used for |
 |---|---|
-| `GET /devices?limit&page` | Fleet list (paginated ×100 internally); also the reachability probe |
-| `GET /devices/:id` | Single device record — existence check at claim time |
-| `GET /devices/:id/state` | Live state snapshot: lock state, power, battery, firmware, connectivity, config, record counts |
-| `POST /devices/:id/commands` | Enqueue a `bw*` command — **asynchronous**: 200 means accepted by Simkura, not delivered to the device |
-| `GET /devices/:id/queue` | The device's pending/processing command queue (Simkura-owned) |
-| `GET/POST/PUT/DELETE /webhooks…` | Webhook registration management, plus `/test`, `/regenerate-secret`, `/deliveries` |
+| `GET /api/v2/devices?limit&page` | Fleet list (paginated ×100 internally) — each item is the device "spine" (`meta`, `device`, `capabilities`); also the reachability probe |
+| `GET /api/v2/devices/:id` | Full device resource **with state embedded** (v2 has no separate `/state` endpoint): per-door lock state and counts, power/battery, connectivity, firmware |
+| `POST /api/v1/devices/:id/commands` | Enqueue a `bw*` command — **asynchronous**: 200 means accepted by Simkura, not delivered to the device. Migrates to v2's resource-style command endpoints when they leave draft |
+| `GET /api/v1/devices/:id/queue` | The device's pending/processing command queue (Simkura-owned) |
+| `GET/POST/PUT/DELETE /api/v1/webhooks…` | Webhook registration management, plus `/test`, `/regenerate-secret`, `/deliveries` (`/v2/webhooks` is not drafted yet) |
 
 Commands are queued by Simkura and delivered when the device wakes — a
 sleeping lock holds its queue until its next check-in.
@@ -107,8 +107,10 @@ Both run inline in the API process (started from `server.js`):
   with `POST /api/platform/devices/sync`. Disable:
   `SIMKURA_DISCOVERY_ENABLED=false`.
 - **State sync** — every 10min (`SIMKURA_STATE_SYNC_INTERVAL_MS`), polls
-  each device's live state and mirrors it onto the row (status, lock state,
-  battery, firmware, signal, config, firmware-reported record counts). This
+  each device's v2 resource and mirrors it onto the row (status, lock state
+  and override, battery percentage and **health** — `dead` means the motor
+  can't actuate — firmware, signal, latch interval, firmware-reported record
+  counts). Multi-door devices are mirrored as door 1 only for now. This
   poll is the **only** path that can mark a device offline — webhooks only
   arrive from live devices. `last_seen` never moves backwards (webhooks and
   polls both bump it). Also refreshed on demand when a device detail page
@@ -175,11 +177,15 @@ orchestrator uses.
 
 ## Current limitations
 
+- **Commands still speak v1** (`bw*` vocabulary) while Simkura's v2 command
+  surface is in draft. The public sandbox key is read-only, so lock commands
+  require a real `sk_live_…` key until then.
 - **Holidays** are modeled in the database and counted by firmware, but are
-  not yet pushed to devices.
+  not yet pushed to devices (v2's `holidays.add` will lift this with the
+  command migration).
+- **Multi-door devices**: v2 models `doors[]` as first-class; Loudin
+  currently mirrors door 1 only.
 - **Per-reseller Simkura accounts**: the schema (`companies.simkura_api_key`
   / `simkura_api_url`) and client support per-reseller credentials, but the
   current release routes all device traffic through the platform
   credentials. Roadmap.
-- **Mock API**: planned on the Simkura side; until it ships, evaluating
-  device features requires real API access ([simkura.com](https://simkura.com)).

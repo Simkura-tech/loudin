@@ -2,7 +2,7 @@
  * Simkura device-discovery worker.
  *
  * Once a day, pulls the full device list from Simkura
- *   GET /api/v1/devices
+ *   GET /api/v2/devices  (normalized by simkuraClient.getDevices())
  * and INSERTs any device we don't already know about into our `devices`
  * table as **unclaimed** rows (company_id IS NULL). End-user admins can
  * then claim them through the existing add-device search flow — the
@@ -41,24 +41,23 @@ function defaultName(hwId) {
 }
 
 /**
- * Map a Simkura device payload into the row shape our `devices` table
- * expects. Anything Simkura doesn't tell us falls back to safe defaults.
+ * Map a normalized v2 list item (from simkuraClient.getDevices()) into the
+ * row shape our `devices` table expects. The v2 list spine carries live
+ * status + lastSeen, so new rows start with real values; door/power detail
+ * arrives with the state-sync worker's first pass.
  */
 function rowFromSimkura(s) {
-  const hwId = s.device_id || s.deviceId;
-  if (!hwId) return null;
-  const meta = s.metadata?.nrfCloud || {};
-  // Map Simkura's "device_mode" to our power_mode column when it lines up.
-  const POWER_MODES = new Set(['active', 'sleep', 'deep_sleep']);
-  const powerMode = POWER_MODES.has(s.device_mode) ? s.device_mode : 'active';
+  if (!s?.device_id) return null;
+  const STATUSES = new Set(['online', 'offline']); // column CHECK has no 'unknown'
   return {
-    device_id:        hwId,
-    device_type:      meta.type || 'sb6',
-    firmware_version: meta.firmwareVersion || null,
-    device_name:      defaultName(hwId),
-    status:           'offline',   // we only know its real state when events flow
+    device_id:        s.device_id,
+    device_type:      s.device_type || 'sb6',
+    firmware_version: s.firmware_version || null,
+    device_name:      defaultName(s.device_id),
+    status:           STATUSES.has(s.status) ? s.status : 'offline',
     door_state:       'unknown',
-    power_mode:       powerMode,
+    power_mode:       'active',
+    last_seen:        s.last_seen || null,
   };
 }
 
@@ -71,8 +70,8 @@ async function upsertUnclaimed(row) {
   const r = await query(
     `INSERT INTO devices
        (device_id, device_type, firmware_version, device_name,
-        status, door_state, power_mode)
-     VALUES ($1, $2, $3, $4, $5, $6, $7)
+        status, door_state, power_mode, last_seen)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
      ON CONFLICT (device_id) DO NOTHING
      RETURNING id`,
     [
@@ -83,6 +82,7 @@ async function upsertUnclaimed(row) {
       row.status,
       row.door_state,
       row.power_mode,
+      row.last_seen,
     ]
   );
   return r.rowCount > 0 ? 'inserted' : 'skipped';

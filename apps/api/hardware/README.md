@@ -31,9 +31,10 @@ if (simkura.client.isAvailable()) {
 }
 ```
 
-To evaluate without hardware, point `SIMKURA_API_URL` at the Simkura mock API
-(hosted by simkura.com; returns realistic test data). See the project README
-for how to get real hardware and production API access.
+To evaluate without hardware, use Simkura's public sandbox key
+(`SIMKURA_API_KEY=sk_demo_simkura_sandbox` — the `.env.example` default):
+read-only, three fixture devices, documented at docs.simkura.com. See the
+project README for how to get real hardware and production API access.
 
 ## Configuration — platform Integrations UI
 

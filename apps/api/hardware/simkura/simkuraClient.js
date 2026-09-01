@@ -2,11 +2,19 @@
  * Simkura REST API client.
  *
  * Outbound surface (kept narrow on purpose):
- *   - Device discovery   (GET /api/v1/devices, GET /api/v1/devices/:hwId)
- *   - Device commands    (POST /api/v1/devices/:hwId/commands)
- *   - Webhook management (CRUD + test + secret rotation + deliveries)
+ *   - Device reads       (v2: GET /api/v2/devices, GET /api/v2/devices/:id —
+ *                         state is embedded in the resource; there is no
+ *                         separate /state endpoint in v2)
+ *   - Device commands    (still v1: POST /api/v1/devices/:hwId/commands —
+ *                         migrates to the v2 resource-style command endpoints
+ *                         once the v2 command surface leaves draft)
+ *   - Webhook management (v1 CRUD + test + secret rotation + deliveries;
+ *                         /v2/webhooks is not drafted yet)
+ *
+ * Contract source: simkura-core/api/openapi/v2.yaml (docs.simkura.com).
  *
  * Auth: a static API key sent as a Bearer token on every request.
+ * The public sandbox key (sk_demo_simkura_sandbox) is v2-only and read-only.
  *
  * Use the singleton (env-var credentials) for the default case:
  *   const simkura = require('./hardware/simkura');
@@ -23,6 +31,28 @@ const axios = require('axios');
 const defaultConfig = require('./config/simkuraConfig');
 
 const API_V1 = '/api/v1';
+const API_V2 = '/api/v2';
+
+/**
+ * Flatten a v2 list item (the "spine": meta + device + capabilities) into
+ * the shape our callers consume. `raw` keeps the original for anything else.
+ */
+function normalizeSpine(item) {
+  const id = item?.device?.id;
+  if (!id) return null;
+  return {
+    device_id:        id,
+    device_type:      typeof item.device.board === 'string' && item.device.board.trim()
+                        ? item.device.board.trim().toLowerCase()
+                        : 'sb6',
+    firmware_version: item.device.firmware ?? null,
+    status:           item.meta?.status ?? null,       // 'online'|'offline'|'unknown'
+    last_seen:        item.meta?.lastSeen ?? null,
+    deployed:         item.meta?.deployed ?? null,
+    capabilities:     Array.isArray(item.capabilities) ? item.capabilities : [],
+    raw:              item,
+  };
+}
 
 const RETRY = {
   maxAttempts:  parseInt(process.env.SIMKURA_RETRY_MAX_ATTEMPTS, 10)  || 3,
@@ -129,7 +159,7 @@ class SimkuraClient {
     if (!this.isAvailable()) return { ok: false, error: 'not_configured' };
     const started = Date.now();
     try {
-      await this.client.get(`${API_V1}/devices`, { params: { limit: 1, page: 1 } });
+      await this.client.get(`${API_V2}/devices`, { params: { limit: 1, page: 1 } });
       return { ok: true, latency_ms: Date.now() - started };
     } catch (err) {
       return {
@@ -147,48 +177,50 @@ class SimkuraClient {
 
   /**
    * List every device registered in Simkura for the configured account,
-   * paginating internally so the caller gets the full set.
+   * paginating internally so the caller gets the full set. Items are
+   * normalized v2 spines — see normalizeSpine() for the shape.
    * @returns {Promise<{devices: Array, total: number}>}
    */
   async getDevices() {
     const PAGE = 100;
-    const first = await this.client.get(`${API_V1}/devices`, { params: { limit: PAGE, page: 1 } });
+    const first = await this.client.get(`${API_V2}/devices`, { params: { limit: PAGE, page: 1 } });
     const total = first.data.total ?? (first.data.devices?.length ?? 0);
-    const devices = [...(first.data.devices || [])];
+    const items = [...(first.data.devices || [])];
 
+    // Guard against endpoints that ignore pagination params (the sandbox
+    // does): stop as soon as a page comes back empty or repeats.
     const pages = Math.ceil(total / PAGE);
-    for (let p = 2; p <= pages; p++) {
-      const r = await this.client.get(`${API_V1}/devices`, { params: { limit: PAGE, page: p } });
-      devices.push(...(r.data.devices || []));
+    for (let p = 2; p <= pages && items.length < total; p++) {
+      const r = await this.client.get(`${API_V2}/devices`, { params: { limit: PAGE, page: p } });
+      const batch = r.data.devices || [];
+      if (batch.length === 0) break;
+      items.push(...batch);
     }
+
+    const devices = items.map(normalizeSpine).filter(Boolean);
     return { devices, total };
   }
 
   /**
-   * Fetch a single device's full record from Simkura.
-   * @param {string} hardwareDeviceId - The device's hardware serial id
-   *   (NOT Simkura's internal UUID — GET /api/v1/devices/{id} 404s on the UUID).
+   * Fetch a single device's full v2 resource — the capability-vocabulary
+   * shape: { meta, device, capabilities, doors[], power?, connectivity? }.
+   * State is embedded (v2 has no separate /state endpoint); this payload is
+   * what stateSyncWorker mirrors into our `devices` row.
+   *
+   * @param {string} hardwareDeviceId - Canonical device id (`device.id`,
+   *   e.g. "nrf-352656…"). Opaque string; matches the id in URLs and webhooks.
    */
   async getDevice(hardwareDeviceId) {
-    const r = await this.client.get(`${API_V1}/devices/${hardwareDeviceId}`);
-    return r.data?.device ?? r.data;
+    const r = await this.client.get(`${API_V2}/devices/${hardwareDeviceId}`);
+    return r.data;
   }
 
   /**
-   * Fetch a device's live state snapshot:
-   *   { deviceId, name, status, lastSeen, lastSeenLocal,
-   *     lock: { state, override }, power: { mode, deepSleepDuration, current },
-   *     battery, batteryPct, firmware, osdpStage,
-   *     counts: { credentials, shifts, holidays, doorShifts },
-   *     connectivity: { carrier, signal }, config: { cardType, latchInterval } }
-   *
-   * Richer than the webhook feed — this is where battery, firmware, and
-   * connectivity live. See hardware/simkura/stateSyncWorker.js for how
-   * it's mirrored into our `devices` row.
+   * v1 compatibility alias — v2 embeds state in the device resource, so
+   * "state" and "device" are the same fetch now.
    */
   async getDeviceState(hardwareDeviceId) {
-    const r = await this.client.get(`${API_V1}/devices/${hardwareDeviceId}/state`);
-    return r.data?.state ?? r.data;
+    return this.getDevice(hardwareDeviceId);
   }
 
   // ──────────────────────────────────────────────────────────────────────
@@ -291,3 +323,4 @@ const client = new SimkuraClient();
 
 module.exports = client;
 module.exports.SimkuraClient = SimkuraClient;
+module.exports.normalizeSpine = normalizeSpine; // exported for tests

@@ -1,27 +1,38 @@
 /**
  * Simkura device-state sync worker.
  *
- * Polls GET /api/v1/devices/:hwId/state for every live device row and
- * mirrors the snapshot into `devices`:
+ * Polls the v2 device resource (GET /api/v2/devices/:id — state is embedded,
+ * no separate /state endpoint) for every live device row and mirrors it into
+ * `devices`:
  *
- *   status              ← state.status ('online' | 'offline'; other values ignored)
- *   door_state          ← state.lock.state
- *   power_mode          ← state.power.mode
- *   battery_percent     ← state.batteryPct   (the % is authoritative — the
- *                          sibling `battery` label is ignored by product decision)
- *   firmware_version    ← state.firmware    (keeps OTA updates visible)
- *   carrier             ← state.connectivity.carrier   (newer firmwares only)
- *   signal_strength     ← state.connectivity.signal    (newer firmwares only)
- *   last_seen           ← state.lastSeen    (never moved backwards — a webhook
+ *   status              ← meta.status ('online' | 'offline'; 'unknown' ignored —
+ *                          not in the column's CHECK constraint)
+ *   last_seen           ← meta.lastSeen (never moved backwards — a webhook
  *                          event may have bumped it more recently)
+ *   door_state          ← doors[0].lock.state
+ *   door_override       ← doors[0].lock.override (0 schedule / 1 command /
+ *                          2 holiday — stored as boolean: any override = true)
+ *   latch_interval_s    ← doors[0].latchInterval
+ *   fw_*_count          ← doors[0].counts (credentials / shifts / holidays)
+ *   power_mode          ← power.state
+ *   battery_percent     ← power.batteryPct (null for plug-in devices)
+ *   battery_health      ← power.batteryHealth ('dead' = safe mode, motor
+ *                          cannot actuate — surfaced so admins act on it)
+ *   firmware_version    ← device.firmware (keeps OTA updates visible)
+ *   carrier             ← connectivity.carrier (cellular only)
+ *   signal_strength     ← connectivity.signal (RSRP dBm, cellular only)
+ *
+ * Multi-door note: v2 models doors[] as first-class, but our schema is
+ * single-door — we mirror door 1 only. Multi-door boards (SB8-4D) need a
+ * doors table before their extra doors are visible here.
+ *
+ * v1-era columns no longer refreshed (see migration 083): osdp_stage,
+ * config_card_type, deep_sleep_duration_s, fw_door_shift_count.
  *
  * This complements the webhook feed (routes/webhooks.js), which is
  * event-driven and only carries door/power/liveness. The poll is what keeps
  * battery + firmware fresh and is the only path that can mark a device
  * OFFLINE — webhooks by definition only arrive from devices that are up.
- *
- * Old firmwares report an empty carrier and signal 0; that combination is
- * stored as NULL/NULL rather than pretending we measured no signal.
  *
  * Devices the platform credentials can't see (another account's, or deleted
  * upstream) return 403/404 — skipped quietly, everything else is logged.
@@ -50,86 +61,84 @@ let timer = null;
 let running = false;
 let lastLoggedError = null;
 
-const STATUSES    = new Set(['online', 'offline']);
-const DOOR_STATES = new Set(['locked', 'unlocked', 'lockdown']);
-const POWER_MODES = new Set(['active', 'sleep', 'deep_sleep']);
+const STATUSES        = new Set(['online', 'offline']);
+const DOOR_STATES     = new Set(['locked', 'unlocked', 'lockdown']);
+const POWER_MODES     = new Set(['active', 'sleep', 'deep_sleep']);
+const BATTERY_HEALTHS = new Set(['ok', 'low', 'dead']);
 
 /**
- * Map a /state payload onto the `devices` columns we mirror. Fields the
+ * Map a v2 device resource onto the `devices` columns we mirror. Fields the
  * payload doesn't carry (or carries with an unusable value) are omitted so
- * the UPDATE never nulls out data we already have.
+ * the UPDATE never nulls out data we already have. Capability blocks are
+ * only present when the device declares the capability — optional chaining
+ * handles their absence.
  */
-function fieldsFromState(state) {
+function fieldsFromState(resource) {
   const out = {};
 
-  if (STATUSES.has(state?.status)) out.status = state.status;
+  if (STATUSES.has(resource?.meta?.status)) out.status = resource.meta.status;
 
-  // A device that has never checked in (lastSeen null) returns a
-  // default-shaped state — batteryPct 0, power.mode 'sleep', etc. Those are
-  // placeholders, not measurements: mirroring them would show a factory-new
-  // lock as "0% battery". Status (above) is still meaningful; skip the rest.
-  const lastSeen = state?.lastSeen ? new Date(state.lastSeen) : null;
+  // A device that has never checked in (lastSeen null) has nothing measured
+  // yet — mirroring its defaults would show a factory-new lock as "0%
+  // battery". Status (above) is still meaningful; skip the rest.
+  const lastSeen = resource?.meta?.lastSeen ? new Date(resource.meta.lastSeen) : null;
   if (!lastSeen || Number.isNaN(lastSeen.getTime())) return out;
 
-  const doorState = state?.lock?.state;
+  // Single-door mirror: door 1 only (see header note on multi-door).
+  const door = Array.isArray(resource?.doors) ? resource.doors[0] : null;
+
+  const doorState = door?.lock?.state;
   if (DOOR_STATES.has(doorState)) out.door_state = doorState;
 
-  const powerMode = state?.power?.mode;
-  if (POWER_MODES.has(powerMode)) out.power_mode = powerMode;
-
-  const pct = Number(state?.batteryPct);
-  if (Number.isFinite(pct)) {
-    out.battery_percent = Math.max(0, Math.min(100, Math.round(pct)));
-  }
-
-  if (typeof state?.firmware === 'string' && state.firmware.trim()) {
-    out.firmware_version = state.firmware.trim();
-  }
-
-  // Connectivity: an empty carrier with signal 0 is old firmware saying
-  // "not reported" — store NULLs. A named carrier makes signal meaningful
-  // (even 0). Values are the firmware's raw units, no conversion.
-  const carrier = typeof state?.connectivity?.carrier === 'string'
-    ? state.connectivity.carrier.trim()
-    : '';
-  const signal = Number(state?.connectivity?.signal);
-  out.carrier = carrier || null;
-  out.signal_strength = carrier && Number.isFinite(signal) ? Math.round(signal) : null;
-
-  // Override flag: firmware sends 0/1. True = door pinned by bwState,
-  // schedule suppressed until a bwState 'normal' clears it.
-  const override = state?.lock?.override;
-  if (override === 0 || override === 1 || typeof override === 'boolean') {
+  // Override: 0 = schedule-controlled, 1 = cloud override, 2 = holiday.
+  // Column is boolean — any active override stores as true.
+  const override = door?.lock?.override;
+  if (override === 0 || override === 1 || override === 2 || typeof override === 'boolean') {
     out.door_override = !!override;
   }
 
-  const deepSleep = Number(state?.power?.deepSleepDuration);
-  if (Number.isFinite(deepSleep) && deepSleep >= 0) {
-    out.deep_sleep_duration_s = Math.round(deepSleep);
-  }
-
-  // OSDP reader link stage (0=Root … 3=Connected).
-  const osdp = Number(state?.osdpStage);
-  if (Number.isInteger(osdp) && osdp >= 0 && osdp <= 3) out.osdp_stage = osdp;
+  const latch = Number(door?.latchInterval);
+  if (Number.isInteger(latch) && latch >= 1 && latch <= 255) out.latch_interval_s = latch;
 
   // Record counts as reported BY the firmware — the device-side truth the
-  // sync UI can hold up against our junction tables.
+  // sync UI can hold up against our junction tables. Door-scoped in v2 (on
+  // single-door hardware the device-wide store is reported as door 1's).
   const countCols = {
-    fw_credential_count:  state?.counts?.credentials,
-    fw_shift_count:       state?.counts?.shifts,
-    fw_holiday_count:     state?.counts?.holidays,
-    fw_door_shift_count:  state?.counts?.doorShifts,
+    fw_credential_count: door?.counts?.credentials,
+    fw_shift_count:      door?.counts?.shifts,
+    fw_holiday_count:    door?.counts?.holidays,
   };
   for (const [col, raw] of Object.entries(countCols)) {
     const n = Number(raw);
     if (Number.isInteger(n) && n >= 0) out[col] = n;
   }
 
-  const cardType = Number(state?.config?.cardType);
-  if ([0, 1, 2].includes(cardType)) out.config_card_type = cardType;
+  const powerMode = resource?.power?.state;
+  if (POWER_MODES.has(powerMode)) out.power_mode = powerMode;
 
-  const latch = Number(state?.config?.latchInterval);
-  if (Number.isInteger(latch) && latch >= 1 && latch <= 255) out.latch_interval_s = latch;
+  // batteryPct is null for plug-in devices — leave the column untouched then.
+  const pct = Number(resource?.power?.batteryPct);
+  if (resource?.power?.batteryPct != null && Number.isFinite(pct)) {
+    out.battery_percent = Math.max(0, Math.min(100, Math.round(pct)));
+  }
+
+  if (BATTERY_HEALTHS.has(resource?.power?.batteryHealth)) {
+    out.battery_health = resource.power.batteryHealth;
+  }
+
+  if (typeof resource?.device?.firmware === 'string' && resource.device.firmware.trim()) {
+    out.firmware_version = resource.device.firmware.trim();
+  }
+
+  // Connectivity: carrier/signal are cellular-only and nullable. A named
+  // carrier makes signal meaningful (even 0); otherwise store NULLs rather
+  // than pretending we measured no signal. Signal is RSRP dBm, raw.
+  const carrier = typeof resource?.connectivity?.carrier === 'string'
+    ? resource.connectivity.carrier.trim()
+    : '';
+  const signal = Number(resource?.connectivity?.signal);
+  out.carrier = carrier || null;
+  out.signal_strength = carrier && Number.isFinite(signal) ? Math.round(signal) : null;
 
   out.last_seen = lastSeen;
 
@@ -308,4 +317,4 @@ function stop() {
   if (timer) { clearTimeout(timer); timer = null; }
 }
 
-module.exports = { start, stop, tick, refreshDevice, sweepOfflineAlerts };
+module.exports = { start, stop, tick, refreshDevice, sweepOfflineAlerts, fieldsFromState };

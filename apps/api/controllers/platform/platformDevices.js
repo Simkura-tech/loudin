@@ -16,22 +16,22 @@ const { client: simkuraClient } = require('../../hardware/simkura');
 function mergedRow({ hwId, simkura, local }) {
   return {
     hardware_device_id: hwId,
-    device_name:        local?.device_name ?? simkura?.name ?? null,
+    device_name:        local?.device_name ?? null,
     device_type:        local?.device_type ?? simkura?.device_type ?? null,
-    firmware_version:   local?.firmware_version ?? null,
+    firmware_version:   local?.firmware_version ?? simkura?.firmware_version ?? null,
     company_id:         local?.company_id ?? null,
     company_name:       local?.company_name ?? null,
     claimed:            !!local?.company_id,
     in_simkura:         !!simkura,
-    status:             local?.status ?? 'unknown',
+    status:             local?.status ?? simkura?.status ?? 'unknown',
     door_state:         local?.door_state ?? null,
     battery_percent:    local?.battery_percent ?? null,
     carrier:            local?.carrier ?? null,
     signal_strength:    local?.signal_strength ?? null,
-    last_seen:          local?.last_seen ?? null,
-    // Best-effort registration date — Simkura's createdAt if present, else
-    // our DB's, else null.
-    registered_at:      simkura?.created_at ?? simkura?.createdAt ?? local?.created_at ?? null,
+    last_seen:          local?.last_seen ?? simkura?.last_seen ?? null,
+    // v2 has no registration timestamp on the device resource — our DB's
+    // created_at (set at discovery/claim) is the best available.
+    registered_at:      local?.created_at ?? null,
   };
 }
 
@@ -64,15 +64,14 @@ async function list(req, res, next) {
         WHERE d.deleted_at IS NULL`
     );
 
-    // 3. Merge by hardware device_id (the stable nRF Cloud / serial id).
+    // 3. Merge by the canonical device id (v2 `device.id`, normalized to
+    //    .device_id by the client).
     const dbByHwId = new Map(dbRows.map((d) => [d.device_id, d]));
     const seenHwIds = new Set();
     const merged = [];
 
     for (const s of simkuraDevices) {
-      // Simkura returns the hardware id under .device_id (snake) on the
-      // platform's own API. Accept .deviceId too just in case.
-      const hwId = s.device_id || s.deviceId;
+      const hwId = s.device_id;
       if (!hwId) continue;
       seenHwIds.add(hwId);
       merged.push(mergedRow({ hwId, simkura: s, local: dbByHwId.get(hwId) }));

@@ -462,17 +462,17 @@ async function searchUnclaimed(req, res, next) {
 
     const matches = [];
     for (const s of simkuraDevices) {
-      const hwId = s.device_id || s.deviceId;
+      const hwId = s.device_id;
       if (!hwId) continue;
       if (claimedIds.has(hwId)) continue;
       if (!hwId.toLowerCase().endsWith(suffix)) continue;
       matches.push({
         device_id:        hwId,
-        device_type:      s.metadata?.nrfCloud?.type || 'sb6',
-        firmware_version: s.metadata?.nrfCloud?.firmwareVersion || null,
+        device_type:      s.device_type || 'sb6',
+        firmware_version: s.firmware_version || null,
         status:           s.status || 'unknown',
         last_seen:        s.last_seen || null,
-        registered_at:    s.created_at || null,
+        registered_at:    null, // v2 exposes no registration timestamp
       });
       if (matches.length >= 25) break;
     }
@@ -536,8 +536,12 @@ async function claimDevice(req, res, next) {
       });
     }
 
-    const deviceType      = simkuraDevice?.metadata?.nrfCloud?.type || 'sb6';
-    const firmwareVersion = simkuraDevice?.metadata?.nrfCloud?.firmwareVersion || null;
+    // v2 resource: board/firmware live under `device`.
+    const board = simkuraDevice?.device?.board;
+    const deviceType      = typeof board === 'string' && board.trim()
+      ? board.trim().toLowerCase()
+      : 'sb6';
+    const firmwareVersion = simkuraDevice?.device?.firmware || null;
 
     // Check current claim state. UPDATE the existing row when it's in our
     // pool with company_id NULL; reject when it's already claimed; INSERT
