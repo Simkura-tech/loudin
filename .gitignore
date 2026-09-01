@@ -12,6 +12,10 @@ apps/*/.env
 apps/*/.env.local
 apps/*/.env.production
 apps/api/.env.*
+# …but the committed template must survive a fresh `git add` (a fresh
+# clone/export re-applies these rules; without the negation the example
+# file silently drops out of the repo)
+!apps/api/.env.example
 
 # Logs
 logs
