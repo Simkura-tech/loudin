@@ -17,11 +17,15 @@ const request = require('supertest');
 
 const app = require('../server');
 const { pool, query } = require('../database/db');
-const { insertEvent, applyEventToDeviceState, eventSeverity } =
+const { insertEvent, applyEventToDeviceState, eventSeverity, normalizeEvent } =
   require('../routes/webhooks')._internal;
 
 const SECRET = 'test-webhook-secret';
+// Legacy v1 scheme: bare hex HMAC of the body.
 const sign = (body) => crypto.createHmac('sha256', SECRET).update(body).digest('hex');
+// v2 scheme: timestamp-bound (t=<unix>,v2=<hmac of "t.body">).
+const signV2 = (body, t = Math.floor(Date.now() / 1000)) =>
+  `t=${t},v2=${crypto.createHmac('sha256', SECRET).update(`${t}.${body}`).digest('hex')}`;
 
 let hwId;            // a seeded device to mutate
 let seq = 0;
@@ -59,6 +63,64 @@ describe('Simkura webhooks — receiver', () => {
       .set('X-Webhook-Signature', sign(body)).send(body);
     assert.equal(r3.status, 200);
     assert.equal(r3.body.received, true);
+  });
+
+  test('v2 signature: fresh accepted, stale/tampered rejected; v2 envelope acks with the bare id', async () => {
+    const body = JSON.stringify({
+      apiVersion: 'v2', id: `evt_${eid()}`, type: 'device.wake',
+      deviceId: hwId, severity: 'info', data: {},
+    });
+
+    const ok = await request(app).post('/api/webhooks/simkura')
+      .set('Content-Type', 'application/json')
+      .set('X-Webhook-Signature', signV2(body)).send(body);
+    assert.equal(ok.status, 200);
+    assert.ok(!String(ok.body.event_id).startsWith('evt_'), 'ack carries the normalized id');
+
+    const stale = await request(app).post('/api/webhooks/simkura')
+      .set('Content-Type', 'application/json')
+      .set('X-Webhook-Signature', signV2(body, Math.floor(Date.now() / 1000) - 400)).send(body);
+    assert.equal(stale.status, 401, 'outside the tolerance window');
+
+    const tampered = await request(app).post('/api/webhooks/simkura')
+      .set('Content-Type', 'application/json')
+      .set('X-Webhook-Signature', signV2(body + ' ')).send(body);
+    assert.equal(tampered.status, 401);
+  });
+
+  test('normalizeEvent: v2 envelope maps onto the internal shape; v1 passes through', () => {
+    const v2 = {
+      apiVersion: 'v2', id: 'evt_48291', type: 'command.sent',
+      category: 'command', deviceId: 'nrf-1', door: 1,
+      timestamp: '2026-09-01T14:22:11.000Z', severity: 'info',
+      data: { operation: 'lock.unlock', commandRef: 'cmd_991', door: 1 },
+    };
+    const n = normalizeEvent(v2, { webhookId: '12' });
+    assert.equal(n.event_type, 'command.sent');
+    assert.equal(n.event_category, 'command');
+    assert.equal(n.device_id, 'nrf-1');
+    assert.equal(n.event_id, '48291', 'evt_ prefix stripped for cross-shape dedupe');
+    assert.equal(n.webhook_id, '12');
+    assert.deepEqual(n.metadata, { severity: 'info', door: 1 });
+    assert.deepEqual(n.data, v2.data);
+    assert.ok(!('isTest' in n));
+
+    const test2 = normalizeEvent({ apiVersion: 'v2', type: 'device.wake', isTest: true });
+    assert.equal(test2.isTest, true);
+
+    const v1 = { event_type: 'device.wake', event_id: 7, device_id: 'nrf-1' };
+    assert.equal(normalizeEvent(v1), v1, 'v1 envelope is already the internal shape');
+  });
+
+  test('the same event dedupes across envelope versions', async () => {
+    const id = eid();
+    await insertEvent({ event_type: 'access.granted', event_id: id, device_id: hwId, data: {} });
+    await insertEvent(normalizeEvent({
+      apiVersion: 'v2', id: `evt_${id}`, type: 'access.granted', deviceId: hwId, data: {},
+    }));
+    const { rows } = await query(
+      `SELECT COUNT(*)::int AS n FROM device_events WHERE simkura_event_id = $1`, [id]);
+    assert.equal(rows[0].n, 1, 'v1 delivery and v2 retry of the same event store once');
   });
 
   test('invalid JSON → 400; missing event_type → 400', async () => {

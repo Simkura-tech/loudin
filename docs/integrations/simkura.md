@@ -72,10 +72,19 @@ holidays, schedule) always stack — which is why Loudin pre-flights pushes
 
 Simkura POSTs device events to **`POST /api/webhooks/simkura`**.
 
-- **Verification**: the `X-Webhook-Signature` header must equal the
-  hex-encoded HMAC-SHA256 of the **raw request body**, keyed with
-  `SIMKURA_WEBHOOK_SECRET`. Invalid or missing signature → `401`. This is
-  the only gate — the route has no session auth.
+- **Envelope**: Loudin registers with `payload_version: "v2"` — deliveries
+  arrive as the versioned camelCase envelope (`apiVersion`, `id: evt_…`,
+  `type`, `deviceId`, `door`, `severity`, `data`). The legacy v1 envelope is
+  still parsed (normalized onto the same internal shape), so retries
+  enqueued before the flip — or a deployment that hasn't flipped — keep
+  working. Top-level `door` is stored in the event's metadata.
+- **Verification**: `X-Webhook-Signature` is the v2 timestamp-bound scheme —
+  `t=<unix>,v2=<hex HMAC-SHA256 of "<t>.<raw body>">` keyed with
+  `SIMKURA_WEBHOOK_SECRET`; deliveries older than
+  `SIMKURA_WEBHOOK_TOLERANCE_S` (default 300) are rejected, so a captured
+  request can't be replayed. The legacy body-only hex signature is also
+  accepted (v1-shaped retries are signed that way). Invalid or missing
+  signature → `401`. This is the only gate — the route has no session auth.
 - **Response contract**: Loudin ACKs `200 {"received": true}` immediately
   and processes the event asynchronously (Simkura expects a 2xx within 10s).
 - **Idempotency**: events are inserted with
@@ -105,7 +114,9 @@ Synthetic test events (fired from the Simkura dashboard, marked
 
 **Registering the receiver**: `node apps/api/scripts/register-webhook.js`
 (idempotent; needs `SIMKURA_WEBHOOK_PUBLIC_URL`; `--regenerate` rotates the
-secret). The secret is returned **once** at creation — put it in
+secret). Creates with `payload_version: "v2"`, and flips a pre-v2
+registration to v2 on re-run — safe mid-flight, since the receiver accepts
+both shapes. The secret is returned **once** at creation — put it in
 `SIMKURA_WEBHOOK_SECRET`.
 
 ## Background sync workers
@@ -197,8 +208,8 @@ remain the ground truth for verifying what a lock actually holds.
 
 Ad-hoc commands (`POST /api/devices/:hardware_id/commands`) accept an
 allowlisted subset: `lock.unlock`, `lock.set-state` (locked / unlocked /
-lockdown / `normal` to clear an override), `lock.configure` (card type,
-reader frequency, latch interval), and `device.reboot`. Data-record
+lockdown / `normal` to clear an override), `lock.configure` (latch
+interval, reader technology), and `device.reboot`. Data-record
 commands are reserved for the push orchestrator. (v1's inventory request
 is gone — record counts arrive with every state sync.)
 

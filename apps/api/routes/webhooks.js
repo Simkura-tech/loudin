@@ -6,11 +6,20 @@
  * load-bearing: HMAC verification has to run against the exact bytes
  * Simkura signed, not a re-stringified parse.
  *
- * Envelope (see docs.simkura.com/webhooks): { webhook_id, event_id,
- * event_type, event_category, device_id, company_id, timestamp, data,
- * metadata: { severity } } — plus `isTest: true` on synthetic test events
- * fired from the Simkura dashboard (stored for the feed, but never allowed
- * to mutate device state).
+ * Envelope (see docs.simkura.com/webhooks): Loudin registers with
+ * payload_version 'v2', so deliveries normally arrive as the v2 envelope
+ * { apiVersion: 'v2', id: 'evt_…', type, category, deviceId, door,
+ * timestamp, severity, data } signed with the timestamp-bound scheme
+ * (X-Webhook-Signature: t=<unix>,v2=<hmac of "t.rawBody">). The legacy v1
+ * envelope ({ webhook_id, event_id, event_type, … , metadata: { severity } },
+ * body-only hex signature) is still accepted: retries enqueued before a
+ * payload_version flip arrive in their original shape+scheme, and
+ * self-hosted deployments may not have flipped yet. normalizeEvent() maps
+ * v2 onto the internal (v1-named) shape the pipeline was built on.
+ *
+ * Both shapes may carry `isTest: true` on synthetic test events fired from
+ * the Simkura dashboard (stored for the feed, but never allowed to mutate
+ * device state).
  */
 
 const express = require('express');
@@ -29,23 +38,72 @@ if (!SECRET && process.env.NODE_ENV === 'production') {
   console.error('FATAL: SIMKURA_WEBHOOK_SECRET is not set in production. The /api/webhooks/simkura receiver will reject every request.');
 }
 
+// Max |now − t| for the v2 timestamp-bound signature (replay window).
+const V2_TOLERANCE_S = parseInt(process.env.SIMKURA_WEBHOOK_TOLERANCE_S, 10) || 300;
+
+/** Constant-time compare of two strings as buffers. */
+function timingSafeEq(a, b) {
+  const ab = Buffer.from(a, 'utf8');
+  const bb = Buffer.from(b, 'utf8');
+  if (ab.length !== bb.length) return false;
+  return crypto.timingSafeEqual(ab, bb);
+}
+
 /**
- * Constant-time HMAC compare against the raw request bytes.
+ * Verify the delivery signature against the raw request bytes. Two schemes:
+ *
+ *   v2 — `t=<unix>,v2=<hex HMAC-SHA256 of "<t>.<rawBody>">`: the timestamp
+ *        is authenticated and bounded by V2_TOLERANCE_S, so a captured
+ *        delivery cannot be replayed later.
+ *   v1 — bare hex HMAC-SHA256 of the raw body (legacy; kept so in-flight
+ *        retries from before the payload_version flip still verify).
+ *
  * Returns false rather than throwing on any malformed input.
  */
-function verifySignature(rawBuffer, signatureHex) {
+function verifySignature(rawBuffer, signatureHeader) {
   if (!SECRET) return false;
-  if (!signatureHex || typeof signatureHex !== 'string') return false;
-  let expectedHex;
+  if (!signatureHeader || typeof signatureHeader !== 'string') return false;
   try {
-    expectedHex = crypto.createHmac('sha256', SECRET).update(rawBuffer).digest('hex');
+    const v2 = /^t=(\d+),v2=([0-9a-f]{64})$/.exec(signatureHeader);
+    if (v2) {
+      const t = parseInt(v2[1], 10);
+      if (Math.abs(Math.floor(Date.now() / 1000) - t) > V2_TOLERANCE_S) return false;
+      const expected = crypto.createHmac('sha256', SECRET)
+        .update(`${t}.`).update(rawBuffer).digest('hex');
+      return timingSafeEq(v2[2], expected);
+    }
+    const expectedHex = crypto.createHmac('sha256', SECRET).update(rawBuffer).digest('hex');
+    return timingSafeEq(signatureHeader, expectedHex);
   } catch {
     return false;
   }
-  const a = Buffer.from(signatureHex, 'utf8');
-  const b = Buffer.from(expectedHex, 'utf8');
-  if (a.length !== b.length) return false;
-  return crypto.timingSafeEqual(a, b);
+}
+
+/**
+ * Normalize a delivery to the internal event shape (the v1 field names the
+ * rest of this pipeline was built on). The v2 envelope is camelCase, drops
+ * webhook_id/company_id (the X-Webhook-ID header carries the former),
+ * hoists severity, and adds a top-level door (folded into metadata — the
+ * single-door schema has no column for it yet). The `evt_` prefix is
+ * stripped from the id so dedupe still matches if the same event reaches
+ * us once in each shape across the payload_version cutover.
+ */
+function normalizeEvent(payload, { webhookId = null } = {}) {
+  if (payload?.apiVersion !== 'v2') return payload;
+  return {
+    event_type:     payload.type,
+    event_category: payload.category ?? null,
+    device_id:      payload.deviceId ?? null,
+    event_id:       payload.id != null ? String(payload.id).replace(/^evt_/, '') : null,
+    webhook_id:     webhookId ?? null,
+    timestamp:      payload.timestamp ?? null,
+    data:           payload.data ?? {},
+    metadata: {
+      ...(payload.severity != null ? { severity: payload.severity } : {}),
+      ...(payload.door     != null ? { door: payload.door }         : {}),
+    },
+    ...(payload.isTest === true ? { isTest: true } : {}),
+  };
 }
 
 /**
@@ -372,20 +430,22 @@ router.post('/simkura', async (req, res) => {
     return res.status(400).json({ error: 'Invalid JSON' });
   }
 
-  if (!payload.event_type) {
+  const event = normalizeEvent(payload, { webhookId: req.headers['x-webhook-id'] ?? null });
+
+  if (!event || !event.event_type) {
     return res.status(400).json({ error: 'Missing event_type' });
   }
 
   // ACK fast. Simkura's spec asks for a 2xx within 10s and explicitly says
   // "process events asynchronously" — fire the insert and return.
-  res.status(200).json({ received: true, event_id: payload.event_id ?? null });
+  res.status(200).json({ received: true, event_id: event.event_id ?? null });
 
   // Insert is fire-and-forget; any error is logged but doesn't trigger a
   // retry from Simkura (we already ack'd).
-  insertEvent(payload).catch((err) => {
+  insertEvent(event).catch((err) => {
     console.error('[webhooks/simkura] insert failed:', err);
   });
 });
 
 module.exports = router;
-module.exports._internal = { insertEvent, applyEventToDeviceState, eventSeverity, verifySignature }; // for tests
+module.exports._internal = { insertEvent, applyEventToDeviceState, eventSeverity, verifySignature, normalizeEvent }; // for tests

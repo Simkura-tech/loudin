@@ -17,9 +17,13 @@
  *
  * What it does:
  *   1. Looks for an existing Simkura webhook pointing at our URL.
- *   2. If none, creates one (event filters empty → receive every event).
+ *   2. If none, creates one (event filters empty → receive every event)
+ *      with payload_version 'v2' — the versioned camelCase envelope and
+ *      timestamp-bound signature the receiver is built for.
  *      If found and --regenerate, rotates the secret.
- *      Otherwise reports the existing webhook and exits.
+ *      An existing webhook still on payload_version 'v1' is flipped to
+ *      'v2' (safe mid-flight: the receiver accepts both shapes/schemes,
+ *      and Simkura signs retries by the shape they were enqueued with).
  *   3. Stores the Simkura webhook id in platform_config(simkura_webhook_id).
  *   4. Prints the secret. SIMKURA_WEBHOOK_SECRET in .env must match it
  *      for the receiver to verify signatures.
@@ -84,6 +88,15 @@ function printSecret(webhook) {
 
     const existing = list.find((w) => w.url === PUBLIC_URL);
 
+    // Cutover: flip a pre-v2 registration to the v2 delivery contract.
+    // Idempotent, and safe while v1 retries are still in flight — the
+    // receiver verifies and parses both shapes.
+    if (existing && existing.payload_version !== 'v2') {
+      console.log(`Webhook #${existing.id} is on payload_version '${existing.payload_version ?? 'v1'}' — switching to 'v2'…`);
+      await client.updateWebhook(existing.id, { payload_version: 'v2' });
+      console.log('Switched to the v2 envelope + timestamp-bound signature.');
+    }
+
     if (existing && !regenerate) {
       console.log(`Already registered as webhook #${existing.id} (active=${existing.is_active}).`);
       await setConfig('simkura_webhook_id', String(existing.id));
@@ -103,6 +116,7 @@ function printSecret(webhook) {
       webhook = await client.createWebhook({
         name: 'Loudin receiver',
         url: PUBLIC_URL,
+        payload_version: 'v2',    // versioned envelope + timestamp-bound signature
         event_types: [],          // empty = subscribe to all
         event_categories: [],
         device_ids: [],
