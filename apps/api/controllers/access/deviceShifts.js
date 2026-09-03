@@ -38,7 +38,8 @@ function publicShift(row) {
     end_time:     normalizeTime(row.end_time),
     days_of_week: Array.isArray(days) ? days : [],
     status:       row.status,
-    applied_at:   row.applied_at ?? null,
+    applied_at:   row.applied_at   ?? null,
+    submitted_at: row.submitted_at ?? null,
     synced_at:    row.synced_at  ?? null,
     created_at:   row.created_at,
     updated_at:   row.updated_at,
@@ -127,7 +128,7 @@ async function list(req, res, next) {
       `SELECT s.id, s.shift_name, s.description,
               s.start_time, s.end_time, s.days_of_week,
               s.status, s.created_at, s.updated_at,
-              ds.applied_at, ds.synced_at
+              ds.applied_at, ds.submitted_at, ds.synced_at
          FROM device_shifts ds
          JOIN shifts s ON s.id = ds.shift_id
         WHERE ds.device_id = $1
@@ -225,7 +226,18 @@ async function update(req, res, next) {
       params
     );
     if (rows.length === 0) return res.status(404).json({ error: 'Not Found', message: 'Shift not found' });
-    return res.json({ shift: publicShift(rows[0]) });
+
+    // The window changed → the lock's copy is stale. Bump applied_at so the
+    // row reads "pending push" (synced_at < applied_at) and the next push
+    // rebuilds the shift table with the new values.
+    const { rows: [junction] } = await query(
+      `UPDATE device_shifts
+          SET applied_at = NOW()
+        WHERE device_id = $1 AND shift_id = $2 AND deleted_at IS NULL
+        RETURNING applied_at, submitted_at, synced_at`,
+      [device.id, shiftId]
+    );
+    return res.json({ shift: publicShift({ ...rows[0], ...junction }) });
   } catch (err) {
     return next(err);
   }

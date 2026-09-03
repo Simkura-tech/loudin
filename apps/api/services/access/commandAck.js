@@ -28,7 +28,7 @@
 
 const { query } = require('../../database/db');
 
-const TABLES = ['device_credentials', 'device_shifts'];
+const TABLES = ['device_credentials', 'device_shifts', 'device_holidays'];
 
 // Per the v2 CommandStatus enum: queued | sending | sent | failed |
 // cancelled | expired. queued/sending are still in flight — leave alone.
@@ -115,7 +115,15 @@ async function pendingRefs(hwId) {
       WHERE d.device_id = $1
         AND ds.submitted_at IS NOT NULL
         AND ds.synced_at IS NULL
-        AND ds.simkura_command_id IS NOT NULL`,
+        AND ds.simkura_command_id IS NOT NULL
+     UNION
+     SELECT dh.simkura_command_id
+       FROM device_holidays dh
+       JOIN devices d ON d.id = dh.device_id
+      WHERE d.device_id = $1
+        AND dh.submitted_at IS NOT NULL
+        AND dh.synced_at IS NULL
+        AND dh.simkura_command_id IS NOT NULL`,
     [hwId]
   );
   return rows.map((r) => r.ref).filter(isCommandRef);

@@ -151,6 +151,28 @@ BEGIN
     RETURNING id INTO leo_id;
 
 
+  -- ── Board catalog: what the live catalog (GET /v2/boards) reports for the
+  -- SB6 as of 2026-09. Migration 086 seeds the contract's wider fallback row;
+  -- this narrows it to the real list so the gating UI and the readerTechnology
+  -- guard behave like production before the first discovery tick. The board
+  -- catalog is the authority for capability tiers.
+  INSERT INTO device_boards
+    (manufacturer, board, display_name, num_doors, power_type, capabilities, features, supported)
+  VALUES (
+    'Simkura', 'SB6', 'Simkura SB6', 1, 'battery',
+    '["lock-control","credential-store","schedules","power","connectivity"]'::jsonb,
+    '{"door-position-sensing":false}'::jsonb,
+    '{"doors.reader.protocol":["osdp","wiegand"],"doors.reader.technology":["prox","smartcard","nfc"],"cardFormats":["26-bit","mifare-1k","hid-34","hid-37"],"power.batteryChemistry":["alkaline","lithium"]}'::jsonb
+  )
+  ON CONFLICT (manufacturer, board) DO UPDATE
+    SET display_name = EXCLUDED.display_name,
+        num_doors    = EXCLUDED.num_doors,
+        power_type   = EXCLUDED.power_type,
+        capabilities = EXCLUDED.capabilities,
+        features     = EXCLUDED.features,
+        supported    = EXCLUDED.supported,
+        updated_at   = NOW();
+
   -- ── Devices: the 3 Simkura sandbox fixtures ──────────────────────────────
   -- device_id is Simkura's canonical id. These three exist in the public
   -- sandbox (docs.simkura.com/authentication), so with the sandbox key the
@@ -161,29 +183,56 @@ BEGIN
   INSERT INTO devices (
     company_id, reseller_company_id, device_id, device_type, firmware_version,
     device_name, location, status, door_state, battery_percent, battery_health,
-    power_mode, last_seen, assigned_at
+    power_mode, last_seen, assigned_at,
+    manufacturer, hardware_version, num_doors, power_type, connectivity_transport, deployed,
+    capabilities, features, supported, card_formats,
+    reader_protocol, reader_connection, reader_technology, battery_chemistry
   ) VALUES
     (end_user_id, reseller_id, '00000000-0000-0000-0000-000000000010', 'sb6', '2.3.3',
      'Front Door',    'Main entrance, Floor 1', 'online',  'locked', 95, 'ok',
-     'sleep',      CURRENT_TIMESTAMP - INTERVAL '2 minutes', CURRENT_TIMESTAMP - INTERVAL '30 days')
+     'sleep',      CURRENT_TIMESTAMP - INTERVAL '2 minutes', CURRENT_TIMESTAMP - INTERVAL '30 days',
+     'Simkura', NULL, 1, 'battery', 'cellular', TRUE,
+     '["lock-control","credential-store","schedules","power","connectivity"]',
+     '{"door-position-sensing":false}',
+     '{"doors.reader.protocol":["osdp","wiegand"],"doors.reader.technology":["prox","smartcard","nfc"],"cardFormats":["26-bit","mifare-1k","hid-34","hid-37"],"power.batteryChemistry":["alkaline","lithium"]}',
+     '["26-bit","mifare-1k","hid-34"]',
+     'osdp', 'secure', 'prox', 'alkaline')
   RETURNING id INTO dev_front;
   INSERT INTO devices (
     company_id, reseller_company_id, device_id, device_type, firmware_version,
     device_name, location, status, door_state, battery_percent, battery_health,
-    power_mode, last_seen, assigned_at
+    power_mode, last_seen, assigned_at,
+    manufacturer, hardware_version, num_doors, power_type, connectivity_transport, deployed,
+    capabilities, features, supported, card_formats,
+    reader_protocol, reader_connection, reader_technology, battery_chemistry
   ) VALUES
     (end_user_id, reseller_id, '00000000-0000-0000-0000-000000000020', 'sb6', '2.3.3',
      'Back Entrance', 'Loading dock',           'offline', 'locked', 12, 'low',
-     'deep_sleep', CURRENT_TIMESTAMP - INTERVAL '6 hours',   CURRENT_TIMESTAMP - INTERVAL '30 days')
+     'deep_sleep', CURRENT_TIMESTAMP - INTERVAL '6 hours',   CURRENT_TIMESTAMP - INTERVAL '30 days',
+     'Simkura', NULL, 1, 'battery', 'cellular', TRUE,
+     '["lock-control","credential-store","schedules","power","connectivity"]',
+     '{"door-position-sensing":false}',
+     '{"doors.reader.protocol":["osdp","wiegand"],"doors.reader.technology":["prox","smartcard","nfc"],"cardFormats":["26-bit","mifare-1k","hid-34","hid-37"],"power.batteryChemistry":["alkaline","lithium"]}',
+     '["26-bit","mifare-1k","hid-34"]',
+     'osdp', 'secure', 'prox', 'alkaline')
   RETURNING id INTO dev_back;
   INSERT INTO devices (
     company_id, reseller_company_id, device_id, device_type, firmware_version,
     device_name, location, status, door_state, battery_percent, battery_health,
-    power_mode, last_seen, assigned_at
+    power_mode, last_seen, assigned_at,
+    manufacturer, hardware_version, num_doors, power_type, connectivity_transport, deployed,
+    capabilities, features, supported, card_formats,
+    reader_protocol, reader_connection, reader_technology, battery_chemistry
   ) VALUES
     (end_user_id, reseller_id, '00000000-0000-0000-0000-000000000030', 'sb6', '2.3.3',
      'Server Room',   'Floor 2, IT corridor',   'online',  'locked', 82, 'ok',
-     'sleep',      CURRENT_TIMESTAMP - INTERVAL '1 minute',  CURRENT_TIMESTAMP - INTERVAL '14 days')
+     'sleep',      CURRENT_TIMESTAMP - INTERVAL '1 minute',  CURRENT_TIMESTAMP - INTERVAL '14 days',
+     'Simkura', NULL, 1, 'battery', 'cellular', TRUE,
+     '["lock-control","credential-store","schedules","power","connectivity"]',
+     '{"door-position-sensing":false}',
+     '{"doors.reader.protocol":["osdp","wiegand"],"doors.reader.technology":["prox","smartcard","nfc"],"cardFormats":["26-bit","mifare-1k","hid-34","hid-37"],"power.batteryChemistry":["alkaline","lithium"]}',
+     '["26-bit","mifare-1k","hid-34"]',
+     'osdp', 'secure', 'prox', 'alkaline')
   RETURNING id INTO dev_server;
 
   -- ── Credentials (15 spread across 11 people) ─────────────────────────────

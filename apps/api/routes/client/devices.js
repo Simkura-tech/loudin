@@ -9,7 +9,15 @@ const { requireAdmin } = require('../../middleware/core/rbac');
 const { list, get, update, listEvents, listCompanyEvents, searchUnclaimed, claimDevice, releaseDevice } = require('../../controllers/access/devices');
 const { sendCommand, pushDevice, clearDevice, getQueue } = require('../../controllers/access/deviceCommands');
 const deviceShifts = require('../../controllers/access/deviceShifts');
+const deviceHolidays = require('../../controllers/access/deviceHolidays');
 const deviceCredentials = require('../../controllers/access/deviceCredentials');
+const { requireFeature } = require('../../services/platform/featureFlags');
+
+// Platform feature flags (services/platform/featureFlags.js): a feature a
+// platform admin has turned off is refused here with 403 feature_disabled,
+// whatever the UI shows. Commands are gated inside deviceCommands.
+const schedulesOn = requireFeature('schedules');
+const holidaysOn  = requireFeature('holidays');
 
 const router = express.Router();
 
@@ -31,10 +39,15 @@ router.post  ('/:id/push',               requireAdmin, pushDevice);
 router.post  ('/:id/clear',              requireAdmin, clearDevice);
 router.post  ('/:id/release',            requireAdmin, releaseDevice);
 
-router.get   ('/:id/shifts',             deviceShifts.list);
-router.post  ('/:id/shifts',             requireAdmin, deviceShifts.create);
-router.patch ('/:id/shifts/:shiftId',    requireAdmin, deviceShifts.update);
-router.delete('/:id/shifts/:shiftId',    requireAdmin, deviceShifts.destroy);
+router.get   ('/:id/shifts',             schedulesOn, deviceShifts.list);
+router.post  ('/:id/shifts',             schedulesOn, requireAdmin, deviceShifts.create);
+router.patch ('/:id/shifts/:shiftId',    schedulesOn, requireAdmin, deviceShifts.update);
+router.delete('/:id/shifts/:shiftId',    schedulesOn, requireAdmin, deviceShifts.destroy);
+
+router.get   ('/:id/holidays',             holidaysOn, deviceHolidays.list);
+router.post  ('/:id/holidays',             holidaysOn, requireAdmin, deviceHolidays.create);
+router.patch ('/:id/holidays/:holidayId',  holidaysOn, requireAdmin, deviceHolidays.update);
+router.delete('/:id/holidays/:holidayId',  holidaysOn, requireAdmin, deviceHolidays.destroy);
 
 router.get   ('/:id/credentials',                 deviceCredentials.list);
 router.post  ('/:id/credentials',                 requireAdmin, deviceCredentials.attach);

@@ -15,6 +15,7 @@ const platformDevices = require('../../controllers/platform/platformDevices');
 const platformApiKeys = require('../../controllers/platform/platformApiKeys');
 const platformWebhooks = require('../../controllers/platform/platformWebhooks');
 const platformIntegrations = require('../../controllers/platform/platformIntegrations');
+const platformFeatures = require('../../controllers/platform/platformFeatures');
 
 const router = express.Router();
 
@@ -30,6 +31,10 @@ router.delete('/api-keys/:id', platformApiKeys.revoke);
 
 // Integration settings — platform_config overrides with env fallback,
 // managed from the Integrations page (list → per-integration detail).
+// Feature flags — platform-wide kill switches (services/platform/featureFlags).
+router.get ('/features', platformFeatures.list);
+router.put ('/features', platformFeatures.update);
+
 router.get ('/integrations',            platformIntegrations.list);
 router.get ('/integrations/:name',      platformIntegrations.getOne);
 router.put ('/integrations/:name',      platformIntegrations.update);

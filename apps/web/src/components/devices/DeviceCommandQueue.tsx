@@ -78,6 +78,12 @@ const Row = styled.div`
     justify-content: center;
   }
   .title { font-size: 13px; font-weight: 600; }
+  .error {
+    margin-top: 4px;
+    font-size: 12px;
+    line-height: 1.4;
+    color: ${({ theme }) => theme.colors.status.error};
+  }
   .meta {
     margin-top: 1px;
     font-size: 12px;
@@ -233,7 +239,18 @@ export function DeviceCommandQueue({ deviceId, powerMode, refreshKey = 0 }: Prop
                 <div className="meta">
                   {c.created_at ? `Queued ${relativeTime(c.created_at)}` : 'Queued'}
                   {c.attempts > 1 && ` · attempt ${c.attempts}`}
+                  {c.expires_at && (
+                    <span title={new Date(c.expires_at).toLocaleString()}>
+                      {' · '}
+                      {Date.parse(c.expires_at) > Date.now()
+                        ? `expires ${relativeTime(c.expires_at)}`
+                        : `expired ${relativeTime(c.expires_at)}`}
+                    </span>
+                  )}
                 </div>
+                {c.error_message && (
+                  <div className="error" role="alert">{c.error_message}</div>
+                )}
               </div>
               <StatusChip $status={c.status}>
                 {c.status === 'sending' ? 'Sending' : 'Waiting for device'}

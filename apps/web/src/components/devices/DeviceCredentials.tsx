@@ -31,6 +31,8 @@ import {
   type AttachedCredential,
 } from '../../services/access/devices';
 import { credentialsApi, type Credential } from '../../services/access/credentials';
+import { SyncChip } from './SyncChip';
+import { syncStateOf } from './syncState';
 import { peopleApi, type Person } from '../../services/access/people';
 import { peopleGroupsApi, type PeopleGroup } from '../../services/access/peopleGroups';
 import { getTypeConfig } from '../credentials/credentialTypes';
@@ -377,12 +379,16 @@ function personFullName(c: AttachedCredential): string | null {
 
 interface Props {
   deviceId: number;
+  /** Admins only: every attach/detach route is requireAdmin server-side,
+   *  so the controls are hidden (not merely disabled) for everyone else —
+   *  same rule as DeviceSchedules. */
+  canEdit: boolean;
   /** Fired after a successful attach/detach so the parent can refresh
    *  its sync summary banner. */
   onChanged?: () => void;
 }
 
-export function DeviceCredentials({ deviceId, onChanged }: Props) {
+export function DeviceCredentials({ deviceId, canEdit, onChanged }: Props) {
   const [items, setItems] = useState<AttachedCredential[] | null>(null);
   const [error, setError] = useState<string | null>(null);
 
@@ -648,27 +654,30 @@ export function DeviceCredentials({ deviceId, onChanged }: Props) {
       <Panel>
         <PanelHeader>
           <h2>Credentials</h2>
-          <div style={{ display: 'flex', gap: 6 }}>
-            {(items?.length ?? 0) > 0 && (
-              <DangerButton
-                type="button"
-                style={{ height: 30, padding: '0 10px', fontSize: 12, fontWeight: 600 }}
-                onClick={() => openPicker('remove')}
-              >
-                <IconTrash size={14} /> Remove
-              </DangerButton>
-            )}
-            <PrimaryButton type="button" onClick={() => openPicker('add')}>
-              <IconPlus size={14} /> Add
-            </PrimaryButton>
-          </div>
+          {canEdit && (
+            <div style={{ display: 'flex', gap: 6 }}>
+              {(items?.length ?? 0) > 0 && (
+                <DangerButton
+                  type="button"
+                  style={{ height: 30, padding: '0 10px', fontSize: 12, fontWeight: 600 }}
+                  onClick={() => openPicker('remove')}
+                >
+                  <IconTrash size={14} /> Remove
+                </DangerButton>
+              )}
+              <PrimaryButton type="button" onClick={() => openPicker('add')}>
+                <IconPlus size={14} /> Add
+              </PrimaryButton>
+            </div>
+          )}
         </PanelHeader>
 
         <Description>
           Credentials are the PINs and cards that open this door. Each one
-          belongs to a person (create them from a person&apos;s page), and
-          attaching one here grants that person access to this lock. Changes
-          reach the lock when you push an update to the device.
+          belongs to a person
+          {canEdit
+            ? ' (create them from a person’s page), and attaching one here grants that person access to this lock. Changes reach the lock when you push an update to the device.'
+            : '; attaching one grants that person access to this lock. An admin manages which credentials are on this door.'}
         </Description>
 
         {error && <ErrorBanner role="alert">{error}</ErrorBanner>}
@@ -678,7 +687,11 @@ export function DeviceCredentials({ deviceId, onChanged }: Props) {
         ) : items.length === 0 ? (
           <Empty>
             <div className="title">No credentials installed</div>
-            <div>Attach an existing credential to control who can open this door.</div>
+            <div>
+              {canEdit
+                ? 'Attach an existing credential to control who can open this door.'
+                : 'No PIN or card opens this door yet.'}
+            </div>
           </Empty>
         ) : (
           items.map((c) => {
@@ -700,14 +713,17 @@ export function DeviceCredentials({ deviceId, onChanged }: Props) {
                       <span>{cfg.label}</span>
                       <span>·</span>
                       <span>{credentialDetail(c)}</span>
+                      <SyncChip state={syncStateOf(c)} />
                     </div>
                   </div>
                 </div>
-                <div className="actions">
-                  <IconBtn type="button" title="Remove" onClick={() => setDetachTarget(c)}>
-                    <IconTrash size={16} />
-                  </IconBtn>
-                </div>
+                {canEdit && (
+                  <div className="actions">
+                    <IconBtn type="button" title="Remove" onClick={() => setDetachTarget(c)}>
+                      <IconTrash size={16} />
+                    </IconBtn>
+                  </div>
+                )}
               </Row>
             );
           })

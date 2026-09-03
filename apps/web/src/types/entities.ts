@@ -173,7 +173,7 @@ export interface Shift {
 
 // ── Holidays ───────────────────────────────────────────────────────────────
 
-export type HolidayAccessMode = 'open' | 'restricted' | 'locked';
+export type HolidayAccessMode = 'open' | 'restricted' | 'locked' | 'lockdown';
 
 export interface Holiday {
   id: number;

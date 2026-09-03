@@ -77,9 +77,14 @@ function publicAttachedCredential(row) {
     facility_code:    row.facility_code,
     card_number:      row.card_number,
     status:           row.status,
-    // From the junction:
-    applied_at:       row.applied_at ?? null,
-    synced_at:        row.synced_at  ?? null,
+    // From the junction — the per-row sync trail (see the sync summary on
+    // GET /api/devices/:id for the same three states in aggregate):
+    //   applied_at    attached / last changed in Loudin
+    //   submitted_at  accepted by Simkura (202), awaiting the device
+    //   synced_at     confirmed on the lock
+    applied_at:       row.applied_at   ?? null,
+    submitted_at:     row.submitted_at ?? null,
+    synced_at:        row.synced_at    ?? null,
   };
 }
 
@@ -93,7 +98,7 @@ const ATTACHED_SELECT = `
          c.credential_name, c.credential_type,
          c.credential_value, c.facility_code, c.card_number,
          c.status,
-         dc.applied_at, dc.synced_at
+         dc.applied_at, dc.submitted_at, dc.synced_at
     FROM device_credentials dc
     JOIN credentials c ON c.id = dc.credential_id
     LEFT JOIN people p ON p.id = c.person_id AND p.deleted_at IS NULL

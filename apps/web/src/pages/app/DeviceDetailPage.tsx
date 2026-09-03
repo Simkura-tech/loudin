@@ -26,6 +26,7 @@ import {
   IconCheck,
   IconAlertCircle,
   IconCloudUpload,
+  IconDoor,
   IconEdit,
   IconLoader2,
   IconLock,
@@ -48,10 +49,16 @@ import {
 } from '../../services/access/devices';
 import DeviceActivityFeed from '../../components/devices/DeviceActivityFeed';
 import DeviceActions from '../../components/devices/DeviceActions';
+import DeviceDoorMode from '../../components/devices/DeviceDoorMode';
 import DeviceCommandQueue from '../../components/devices/DeviceCommandQueue';
 import DeviceSchedules from '../../components/devices/DeviceSchedules';
+import DeviceHolidays from '../../components/devices/DeviceHolidays';
 import DeviceCredentials from '../../components/devices/DeviceCredentials';
 import { useAuth } from '../../contexts/AuthContext';
+import { useDeviceCapabilities } from '../../hooks';
+import { useFeatures } from '../../contexts/FeaturesContext';
+import { UnsupportedBadge } from '../../components/devices/CapabilityGate';
+import { unsupportedStyle } from '../../components/devices/capabilityStyles';
 
 // ── Chrome ────────────────────────────────────────────────────────────────────
 
@@ -257,19 +264,33 @@ const LiveGrid = styled.div`
   gap: 10px;
 `;
 
-const LiveTile = styled.div`
+/* $unsupported: the hardware can't report this — see CapabilityGate.tsx.
+   The tile keeps its slot (same layout on every board) but goes dashed and
+   muted, with the reason in the hint and a badge in the label row. */
+const LiveTile = styled.div<{ $unsupported?: boolean }>`
   padding: 10px 12px;
-  border: 1px solid ${({ theme }) => theme.colors.border.light};
+  border: 1px ${({ $unsupported }) => ($unsupported ? 'dashed' : 'solid')}
+    ${({ theme, $unsupported }) => ($unsupported ? theme.colors.border.medium : theme.colors.border.light)};
   border-radius: 8px;
-  background: ${({ theme }) => theme.colors.background.primary};
+  background: ${({ theme, $unsupported }) =>
+    $unsupported ? theme.colors.background.secondary : theme.colors.background.primary};
 
   .label {
+    display: flex;
+    align-items: center;
+    gap: 8px;
     font-size: 11px;
     font-weight: 600;
     letter-spacing: 0.06em;
     text-transform: uppercase;
     color: ${({ theme }) => theme.colors.text.tertiary};
+
+    > :last-child:not(:first-child) { margin-left: auto; }
   }
+  ${({ $unsupported, theme }) => $unsupported && `
+    .value { color: ${theme.colors.text.disabled}; filter: grayscale(1); }
+    .hint  { color: ${theme.colors.text.tertiary}; }
+  `}
   .value {
     display: flex;
     align-items: center;
@@ -337,7 +358,9 @@ const Tabs = styled.nav`
   margin-bottom: 16px;
 `;
 
-const Tab = styled.button<{ $active: boolean }>`
+/* $unsupported: the tab stays in the bar so the page reads the same on every
+   board, but is inert and muted; the reason rides on `title`. */
+const Tab = styled.button<{ $active: boolean; $unsupported?: boolean }>`
   position: relative;
   padding: 8px 12px;
   margin-bottom: -1px;
@@ -354,6 +377,9 @@ const Tab = styled.button<{ $active: boolean }>`
   transition: color 0.15s ease, border-color 0.15s ease;
 
   &:hover { color: ${({ theme }) => theme.colors.text.primary}; }
+
+  ${({ $unsupported }) => $unsupported && unsupportedStyle}
+  ${({ $unsupported, theme }) => $unsupported && `&:hover { color: ${theme.colors.text.secondary}; }`}
 `;
 
 const ErrorBanner = styled.div`
@@ -567,6 +593,8 @@ function formatPendingSummary(sync: DeviceSync): string {
   if (sync.credentials.remove) parts.push(`${sync.credentials.remove} removed ${pluralize('credential', sync.credentials.remove)}`);
   if (sync.shifts.add)         parts.push(`${sync.shifts.add} new ${pluralize('schedule', sync.shifts.add)}`);
   if (sync.shifts.remove)      parts.push(`${sync.shifts.remove} removed ${pluralize('schedule', sync.shifts.remove)}`);
+  if (sync.holidays?.add)      parts.push(`${sync.holidays.add} new ${pluralize('holiday', sync.holidays.add)}`);
+  if (sync.holidays?.remove)   parts.push(`${sync.holidays.remove} removed ${pluralize('holiday', sync.holidays.remove)}`);
   return parts.join(', ') + ' to push to the lock.';
 }
 
@@ -615,23 +643,43 @@ function batteryHint(pct: number | null): string {
   return 'Locks run about a year on a set of batteries under typical use.';
 }
 
-/** OSDP reader link stage → human label. 3 is fully connected. */
-function readerStageLabel(stage: number | null): string {
-  if (stage == null) return '—';
-  return stage === 3 ? 'Connected' : `Connecting (stage ${stage} of 3)`;
-}
-
-const CARD_TYPE_LABELS: Record<number, string> = {
-  0: '26-bit Wiegand',
-  1: '32-bit HID',
-  2: 'Mifare 1k',
+const READER_TECHNOLOGY_LABELS: Record<string, string> = {
+  prox:      'Prox',
+  smartcard: 'Smart card',
+  nfc:       'NFC',
+  ble:       'BLE',
+  multi:     'Multi-technology',
 };
 
-/** Seconds → compact human duration ("2h", "90m", "45s"). */
-function formatSeconds(s: number): string {
-  if (s % 3600 === 0) return `${s / 3600}h`;
-  if (s % 60 === 0) return `${s / 60}m`;
-  return `${s}s`;
+/** Simkura card-format slugs → labels. Unknown slugs fall back to the slug
+ *  (the upstream vocabulary is additive). */
+const CARD_FORMAT_LABELS: Record<string, string> = {
+  '26-bit':    '26-bit Wiegand',
+  'mifare-1k': 'MIFARE 1k',
+  'hid-34':    'HID 34-bit',
+  'hid-37':    'HID 37-bit',
+};
+
+const BATTERY_CHEMISTRY_LABELS: Record<string, string> = {
+  alkaline: 'Alkaline',
+  lithium:  'Lithium',
+  'li-ion': 'Li-ion',
+};
+
+function readerHint(reader: Device['reader']): string {
+  const tech = reader.technology
+    ? ''
+    : ' Reader technology is recorded by the installer under Actions → Provisioning.';
+  switch (reader.protocol) {
+    case 'osdp':
+      return (reader.connection === 'secure'
+        ? 'OSDP reader on a secure channel — PIN entry and reader feedback work.'
+        : 'OSDP reader without a secure channel — it works, but the link to the reader is not encrypted.') + tech;
+    case 'wiegand':
+      return 'One-way Wiegand reader — card data only. PIN entry and reader feedback need OSDP.' + tech;
+    default:
+      return 'Reader link not reported yet.' + tech;
+  }
 }
 
 function lastSeenHint(status: DeviceStatus): string {
@@ -696,11 +744,24 @@ export function DeviceDetailPage() {
   const isAdmin = user?.user_type_id === 1;
 
   const [device, setDevice] = useState<Device | null | undefined>(undefined);
+  // What this board can do — drives the greyed-out treatment on tiles, tabs
+  // and actions. Open on every gate until the device loads.
+  const caps = useDeviceCapabilities(device);
+  // Platform feature flags: a feature turned off by a platform admin is not
+  // offered at all (tab / panel not rendered), unlike a hardware gate.
+  const features = useFeatures();
+  const schedulesOn = features.enabled('schedules');
+  const holidaysOn  = features.enabled('holidays');
+  const doorModeOn  = features.enabled('door_mode');
   const [sync, setSync] = useState<DeviceSync | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [refreshing, setRefreshing] = useState(false);
 
-  const [tab, setTab] = useState<'overview' | 'schedules' | 'credentials' | 'queue' | 'activity'>('overview');
+  const [tab, setTab] = useState<'overview' | 'schedules' | 'holidays' | 'credentials' | 'queue' | 'activity'>('overview');
+  // If the tab we're on gets switched off platform-wide, fall back.
+  useEffect(() => {
+    if ((tab === 'schedules' && !schedulesOn) || (tab === 'holidays' && !holidaysOn)) setTab('overview');
+  }, [tab, schedulesOn, holidaysOn]);
   // Bumping this remounts/reloads the activity feed when the user clicks
   // Refresh in the header while on the Activity tab.
   const [activityKey, setActivityKey] = useState(0);
@@ -878,16 +939,16 @@ export function DeviceDetailPage() {
           <SecondaryButton onClick={() => load()} disabled={refreshing} title="Refresh state">
             <IconRefresh size={16} /> {refreshing ? 'Refreshing…' : 'Refresh'}
           </SecondaryButton>
-          {!device.deleted_at && (
+          {/* Edit and Deactivate are admin-only server-side (PATCH / release
+              are requireAdmin), so hide them rather than let a click 403. */}
+          {!device.deleted_at && isAdmin && (
             <>
               <PrimaryButton onClick={openEdit}>
                 <IconEdit size={16} /> Edit
               </PrimaryButton>
-              {isAdmin && (
-                <DangerButton onClick={handleDeactivate} title="Deactivate this device">
-                  <IconTrash size={16} /> Deactivate
-                </DangerButton>
-              )}
+              <DangerButton onClick={handleDeactivate} title="Deactivate this device">
+                <IconTrash size={16} /> Deactivate
+              </DangerButton>
             </>
           )}
         </div>
@@ -960,12 +1021,51 @@ export function DeviceDetailPage() {
         <Tab type="button" $active={tab === 'overview'} onClick={() => setTab('overview')}>
           Overview
         </Tab>
-        <Tab type="button" $active={tab === 'schedules'} onClick={() => setTab('schedules')}>
-          Schedules
-        </Tab>
-        <Tab type="button" $active={tab === 'credentials'} onClick={() => setTab('credentials')}>
-          Credentials
-        </Tab>
+        {schedulesOn && (() => {
+          const g = caps.gate({ capability: 'schedules' });
+          return (
+            <Tab
+              type="button"
+              $active={tab === 'schedules'}
+              $unsupported={!g.enabled}
+              aria-disabled={!g.enabled}
+              title={g.reason ?? undefined}
+              onClick={() => g.enabled && setTab('schedules')}
+            >
+              Schedules
+            </Tab>
+          );
+        })()}
+        {holidaysOn && (() => {
+          const g = caps.gate({ capability: 'schedules' });
+          return (
+            <Tab
+              type="button"
+              $active={tab === 'holidays'}
+              $unsupported={!g.enabled}
+              aria-disabled={!g.enabled}
+              title={g.reason ?? undefined}
+              onClick={() => g.enabled && setTab('holidays')}
+            >
+              Holidays
+            </Tab>
+          );
+        })()}
+        {(() => {
+          const g = caps.gate({ capability: 'credential-store' });
+          return (
+            <Tab
+              type="button"
+              $active={tab === 'credentials'}
+              $unsupported={!g.enabled}
+              aria-disabled={!g.enabled}
+              title={g.reason ?? undefined}
+              onClick={() => g.enabled && setTab('credentials')}
+            >
+              Credentials
+            </Tab>
+          );
+        })()}
         <Tab type="button" $active={tab === 'queue'} onClick={() => setTab('queue')}>
           Queue
         </Tab>
@@ -984,13 +1084,23 @@ export function DeviceDetailPage() {
         />
       ) : tab === 'schedules' ? (
         <DeviceSchedules deviceId={device.id} canEdit={isAdmin} onChanged={refreshSync} />
+      ) : tab === 'holidays' ? (
+        <DeviceHolidays deviceId={device.id} canEdit={isAdmin} onChanged={refreshSync} />
       ) : tab === 'credentials' ? (
-        <DeviceCredentials deviceId={device.id} onChanged={refreshSync} />
+        <DeviceCredentials deviceId={device.id} canEdit={isAdmin} onChanged={refreshSync} />
       ) : (
       <>
       {isAdmin && (
         <DeviceActions
           device={device}
+          onCommandSent={() => setActivityKey((k) => k + 1)}
+          onDeviceChanged={refreshSync}
+        />
+      )}
+      {doorModeOn && (
+        <DeviceDoorMode
+          device={device}
+          canEdit={isAdmin}
           onCommandSent={() => setActivityKey((k) => k + 1)}
           onDeviceChanged={refreshSync}
         />
@@ -1007,83 +1117,193 @@ export function DeviceDetailPage() {
                   <span style={{ textTransform: 'capitalize' }}>{device.door_state}</span>
                 </div>
                 <div className="hint">
-                  {device.door_override
-                    ? 'Held by manual override — the door schedule is suspended until an admin sets it back to normal.'
-                    : doorStateHint(device.door_state)}
+                  {device.door_override_mode === 'holiday'
+                    ? 'A holiday is in effect — the calendar is driving the door, not its shifts.'
+                    : device.door_override_mode === 'command' || (device.door_override_mode == null && device.door_override)
+                      ? 'Held by a door mode set by an admin — the schedule is suspended until the door is returned to Normal (see Door mode below).'
+                      : doorStateHint(device.door_state)}
                 </div>
               </LiveTile>
-              <LiveTile>
+              {(() => {
+                // Door position is a feature flag that is off on the SB6,
+                // so this tile is greyed out on today's fleet and lights up
+                // on a board that has the sensor.
+                const g = caps.gate({ feature: 'door-position-sensing' });
+                const position = g.enabled ? device.door_position : null;
+                return (
+                  <LiveTile $unsupported={!g.enabled} title={g.reason ?? undefined}>
+                    <div className="label">
+                      <span>Door position</span>
+                      {!g.enabled && <UnsupportedBadge reason={g.reason} />}
+                    </div>
+                    <div className="value">
+                      <IconDoor size={20} />
+                      <span style={{ textTransform: 'capitalize' }}>{position ?? '—'}</span>
+                    </div>
+                    <div className="hint">
+                      {!g.enabled
+                        ? g.reason
+                        : position
+                          ? 'Open or closed, as reported by the door position sensor.'
+                          : 'Not reported yet — the sensor value arrives on the next state check.'}
+                    </div>
+                  </LiveTile>
+                );
+              })()}
+              <LiveTile style={{ gridColumn: '1 / -1' }}>
                 <div className="label">Power mode</div>
                 <div className="value" style={{ fontSize: 16 }}>
                   <span style={{ textTransform: 'capitalize' }}>
                     {device.power_mode.replace('_', ' ')}
                   </span>
-                  {device.power_mode === 'deep_sleep' && device.deep_sleep_duration_s != null && (
-                    <span style={{ fontSize: 13, color: '#94a3b8', fontWeight: 500 }}>
-                      · wakes every {formatSeconds(device.deep_sleep_duration_s)}
-                    </span>
-                  )}
                 </div>
                 <div className="hint">{powerModeHint(device.power_mode)}</div>
               </LiveTile>
-              <LiveTile style={{ gridColumn: '1 / -1' }}>
-                <div className="label">Battery</div>
-                <div className="value">
-                  {batteryIcon(device.battery_percent)}
-                  {device.battery_percent != null ? `${device.battery_percent}%` : '—'}
-                </div>
-                {battery && device.battery_percent != null && (
-                  <BatteryBar $pct={device.battery_percent} $tone={battery.tone} />
-                )}
-                <div className="hint">{batteryHint(device.battery_percent)}</div>
-              </LiveTile>
-              <LiveTile style={{ gridColumn: '1 / -1' }}>
-                <div className="label">Connectivity</div>
-                <div className="value" style={{ fontSize: 16 }}>
-                  {device.carrier ? <IconAntennaBars5 size={20} /> : <IconAntennaBarsOff size={20} />}
-                  {device.carrier ?? '—'}
-                  {device.signal_strength != null && (
-                    <span style={{ fontSize: 13, color: '#94a3b8', fontWeight: 500 }}>
-                      · signal {device.signal_strength}
-                    </span>
-                  )}
-                </div>
-                <div className="hint">
-                  {device.carrier
-                    ? 'Cellular carrier and signal as last reported by the lock.'
-                    : 'Not reported yet — requires a newer firmware.'}
-                </div>
-              </LiveTile>
-              <LiveTile>
-                <div className="label">Card reader</div>
-                <div className="value" style={{ fontSize: 16 }}>
-                  {readerStageLabel(device.osdp_stage)}
-                </div>
-                <div className="hint">
-                  {device.osdp_stage == null
-                    ? 'Reader link not reported yet.'
-                    : device.osdp_stage === 3
-                      ? 'The card reader is talking to the lock normally.'
-                      : 'The card reader is still negotiating its link — card reads may not work yet.'}
-                </div>
-              </LiveTile>
-              <LiveTile>
-                <div className="label">Door config</div>
-                <div className="value" style={{ fontSize: 16 }}>
-                  {device.config_card_type != null
-                    ? CARD_TYPE_LABELS[device.config_card_type] ?? `Type ${device.config_card_type}`
-                    : '—'}
-                  {device.latch_interval_s != null && (
-                    <span style={{ fontSize: 13, color: '#94a3b8', fontWeight: 500 }}>
-                      · {device.latch_interval_s}s latch
-                    </span>
-                  )}
-                </div>
-                <div className="hint">
-                  Card format and how long a momentary unlock holds the door open.
-                  Change both under Actions → Provisioning.
-                </div>
-              </LiveTile>
+              {(() => {
+                // Battery: needs the power block, and a plug-in board has
+                // no battery to report even when it has one.
+                const capGate = caps.gate({ capability: 'power' });
+                const g = !capGate.enabled
+                  ? capGate
+                  : caps.powerType === 'plugin'
+                    ? { enabled: false, reason: `${caps.boardName} is mains-powered — there is no battery to report.` }
+                    : capGate;
+                return (
+                  <LiveTile style={{ gridColumn: '1 / -1' }} $unsupported={!g.enabled} title={g.reason ?? undefined}>
+                    <div className="label">
+                      <span>Battery</span>
+                      {!g.enabled && <UnsupportedBadge reason={g.reason} />}
+                    </div>
+                    <div className="value">
+                      {batteryIcon(g.enabled ? device.battery_percent : null)}
+                      {g.enabled && device.battery_percent != null ? `${device.battery_percent}%` : '—'}
+                      {g.enabled && device.battery_health && device.battery_health !== 'ok' && (
+                        <span style={{
+                          fontSize: 12, fontWeight: 600,
+                          color: device.battery_health === 'dead' ? '#b91c1c' : '#b45309',
+                        }}>
+                          · {device.battery_health === 'dead' ? 'Dead — safe mode' : 'Low'}
+                        </span>
+                      )}
+                      {g.enabled && device.battery_chemistry && (
+                        <span style={{ fontSize: 13, color: '#94a3b8', fontWeight: 500 }}>
+                          · {BATTERY_CHEMISTRY_LABELS[device.battery_chemistry] ?? device.battery_chemistry}
+                        </span>
+                      )}
+                    </div>
+                    {g.enabled && battery && device.battery_percent != null && (
+                      <BatteryBar
+                        $pct={device.battery_percent}
+                        $tone={device.battery_health === 'dead' ? 'critical'
+                             : device.battery_health === 'low' && battery.tone === 'good' ? 'low'
+                             : battery.tone}
+                      />
+                    )}
+                    <div className="hint">
+                      {!g.enabled
+                        ? g.reason
+                        : device.battery_health === 'dead'
+                          ? 'The lock reports its batteries as dead and has entered safe mode — the motor will not move until they are replaced.'
+                          : device.battery_health === 'low'
+                            ? 'The lock reports its batteries as low. Replace them soon to keep the door operating.'
+                            : batteryHint(device.battery_percent)}
+                    </div>
+                  </LiveTile>
+                );
+              })()}
+              {(() => {
+                const g = caps.gate({ capability: 'connectivity' });
+                return (
+                  <LiveTile style={{ gridColumn: '1 / -1' }} $unsupported={!g.enabled} title={g.reason ?? undefined}>
+                    <div className="label">
+                      <span>Connectivity</span>
+                      {!g.enabled && <UnsupportedBadge reason={g.reason} />}
+                    </div>
+                    <div className="value" style={{ fontSize: 16 }}>
+                      {g.enabled && device.carrier ? <IconAntennaBars5 size={20} /> : <IconAntennaBarsOff size={20} />}
+                      {(g.enabled && device.carrier) || '—'}
+                      {g.enabled && device.signal_strength != null && (
+                        <span style={{ fontSize: 13, color: '#94a3b8', fontWeight: 500 }}>
+                          · signal {device.signal_strength}
+                        </span>
+                      )}
+                    </div>
+                    <div className="hint">
+                      {!g.enabled
+                        ? g.reason
+                        : device.carrier
+                          ? 'Cellular carrier and signal as last reported by the lock.'
+                          : 'Not reported yet — requires a newer firmware.'}
+                    </div>
+                  </LiveTile>
+                );
+              })()}
+              {(() => {
+                // Reader: v2 reports the wire protocol and OSDP secure-channel
+                // status; technology is whatever the installer recorded.
+                const g = caps.gate({ capability: 'lock-control' });
+                const r = device.reader;
+                const protocol = !g.enabled ? null
+                  : r.protocol === 'osdp'    ? 'OSDP'
+                  : r.protocol === 'wiegand' ? 'Wiegand'
+                  : null;
+                return (
+                  <LiveTile $unsupported={!g.enabled} title={g.reason ?? undefined}>
+                    <div className="label">
+                      <span>Reader</span>
+                      {!g.enabled && <UnsupportedBadge reason={g.reason} />}
+                    </div>
+                    <div className="value" style={{ fontSize: 16, flexWrap: 'wrap' }}>
+                      {protocol ?? '—'}
+                      {protocol && r.connection && (
+                        <span style={{ fontSize: 13, color: '#94a3b8', fontWeight: 500 }}>
+                          · {r.connection}
+                        </span>
+                      )}
+                      {g.enabled && r.technology && (
+                        <span style={{ fontSize: 13, color: '#94a3b8', fontWeight: 500 }}>
+                          · {READER_TECHNOLOGY_LABELS[r.technology] ?? r.technology}
+                        </span>
+                      )}
+                    </div>
+                    <div className="hint">{g.enabled ? readerHint(r) : g.reason}</div>
+                  </LiveTile>
+                );
+              })()}
+              {(() => {
+                // Card formats: the device's own effective list when its
+                // firmware has reported one, else the board's — caps
+                // already does that fallback.
+                const g = caps.gate({ capability: 'credential-store' });
+                const formats = g.enabled ? caps.cardFormats : null;
+                const fromDevice = device.card_formats != null;
+                return (
+                  <LiveTile $unsupported={!g.enabled} title={g.reason ?? undefined}>
+                    <div className="label">
+                      <span>Card formats</span>
+                      {!g.enabled && <UnsupportedBadge reason={g.reason} />}
+                    </div>
+                    <div className="value" style={{ fontSize: 14, flexWrap: 'wrap' }}>
+                      {formats && formats.length > 0
+                        ? formats.map((f) => CARD_FORMAT_LABELS[f] ?? f).join(', ')
+                        : '—'}
+                      {g.enabled && device.latch_interval_s != null && (
+                        <span style={{ fontSize: 13, color: '#94a3b8', fontWeight: 500 }}>
+                          · {device.latch_interval_s}s latch
+                        </span>
+                      )}
+                    </div>
+                    <div className="hint">
+                      {!g.enabled
+                        ? g.reason
+                        : (fromDevice
+                            ? 'Card formats this lock can read, as reported by its firmware. '
+                            : 'Card formats this board can read — the lock has not reported its own list yet. ')
+                          + 'The latch is how long a momentary unlock holds the door; change it under Actions → Provisioning.'}
+                    </div>
+                  </LiveTile>
+                );
+              })()}
               <LiveTile style={{ gridColumn: '1 / -1' }}>
                 <div className="label">On the lock</div>
                 <div className="value" style={{ fontSize: 16 }}>
@@ -1093,8 +1313,11 @@ export function DeviceDetailPage() {
                   {device.fw_counts?.shifts != null && (
                     <span style={{ fontSize: 13, color: '#94a3b8', fontWeight: 500 }}>
                       · {device.fw_counts.shifts} {pluralize('shift', device.fw_counts.shifts)}
-                      {device.fw_counts.door_shifts != null &&
-                        ` · ${device.fw_counts.door_shifts} ${pluralize('schedule', device.fw_counts.door_shifts)}`}
+                    </span>
+                  )}
+                  {device.fw_counts?.holidays != null && (
+                    <span style={{ fontSize: 13, color: '#94a3b8', fontWeight: 500 }}>
+                      · {device.fw_counts.holidays} {pluralize('holiday', device.fw_counts.holidays)}
                     </span>
                   )}
                 </div>
@@ -1127,9 +1350,22 @@ export function DeviceDetailPage() {
                 <dd><span className="mono">{device.device_id}</span></dd>
               </DetailRow>
               <DetailRow>
-                <dt>Device type</dt>
-                <dd>{device.device_type}</dd>
+                <dt>Board</dt>
+                <dd>
+                  {device.board?.display_name ?? device.device_type.toUpperCase()}
+                  {device.hardware_version && (
+                    <span style={{ marginLeft: 6, color: '#94a3b8', fontWeight: 500 }}>
+                      rev {device.hardware_version}
+                    </span>
+                  )}
+                </dd>
               </DetailRow>
+              {device.manufacturer && !device.board?.display_name && (
+                <DetailRow>
+                  <dt>Manufacturer</dt>
+                  <dd>{device.manufacturer}</dd>
+                </DetailRow>
+              )}
               <DetailRow>
                 <dt>Firmware</dt>
                 <dd>{device.firmware_version || <span className="empty">—</span>}</dd>

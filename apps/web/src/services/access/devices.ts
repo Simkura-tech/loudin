@@ -10,9 +10,40 @@ import api from '../api';
 export type DeviceStatus    = 'online' | 'offline' | 'error' | 'maintenance';
 export type DoorState       = 'locked' | 'unlocked' | 'lockdown' | 'unknown';
 export type DevicePowerMode = 'active' | 'sleep' | 'deep_sleep';
+export type ReaderTechnology = 'prox' | 'smartcard' | 'nfc' | 'ble' | 'multi';
+/** Simkura v2 capability slugs. The upstream vocabulary is additive, so
+ *  unknown strings may appear — keep the type open. */
+export type DeviceCapability =
+  | 'lock-control' | 'credential-store' | 'schedules' | 'power' | 'connectivity'
+  | (string & Record<never, never>);
+
+/**
+ * One entry from Simkura's public hardware catalog (GET /v2/boards), as
+ * mirrored in the API's `device_boards` table. Identity is (manufacturer,
+ * board). Carries the board's capability tiers — the authority for feature
+ * gating; a device's own reported tiers are only consulted when its board
+ * is not in the catalog.
+ */
+export interface DeviceBoard {
+  manufacturer: string;
+  board: string;
+  /** e.g. "Simkura SB6". Null when the catalog has no friendly name. */
+  display_name: string | null;
+  num_doors: number | null;
+  power_type: 'battery' | 'plugin' | null;
+  capabilities: DeviceCapability[];
+  features: Record<string, boolean>;
+  supported: Record<string, string[]>;
+  /** Last refresh from Simkura; null for the seeded SB6 fallback row. */
+  synced_at: string | null;
+}
 
 export interface Device {
   id: number;
+  /** Catalog entry for this device's board, or null when the board is not
+   *  in the catalog. The catalog is the authority for the capability tiers;
+   *  the device's own tiers below are the fallback for an unlisted board. */
+  board: DeviceBoard | null;
   device_id: string;
   device_type: string;
   firmware_version: string | null;
@@ -22,31 +53,67 @@ export interface Device {
   status: DeviceStatus;
   door_state: DoorState;
   battery_percent: number | null;
+  /** Firmware-reported health. `dead` = safe mode: the motor cannot move
+   *  until the batteries are replaced. Null when unreported / plug-in. */
+  battery_health: 'ok' | 'low' | 'dead' | null;
   power_mode: DevicePowerMode;
   /** Cellular carrier + raw signal value. Reported by newer firmwares only —
    *  null means the device hasn't reported connectivity yet. */
   carrier: string | null;
   signal_strength: number | null;
-  /** Richer state mirrored from Simkura's /state poll. Null = not reported
-   *  yet (old firmware / never polled). */
+  /** Richer state mirrored from the v2 device resource by the state-sync
+   *  poll. Null = not reported yet / not applicable. */
   door_override: boolean | null;
-  deep_sleep_duration_s: number | null;
-  /** OSDP reader link stage: 0=Root … 3=Connected. */
-  osdp_stage: number | null;
+  /** What is overriding the schedule: none (door follows shifts and
+   *  holidays), command (an admin set a door mode), holiday (a holiday
+   *  window is in effect). Null = never reported. */
+  door_override_mode: 'none' | 'command' | 'holiday' | null;
+  /** Open / closed. Null unless the board has door-position-sensing. */
+  door_position: 'open' | 'closed' | null;
+  /** Reader facts for door 1. protocol/connection are reported by the
+   *  device; technology is what the installer recorded via Provisioning. */
+  reader: {
+    protocol: 'osdp' | 'wiegand' | null;
+    /** OSDP secure-channel status. Null for wiegand. */
+    connection: 'secure' | 'insecure' | null;
+    technology: ReaderTechnology | null;
+  };
+  battery_chemistry: 'alkaline' | 'lithium' | 'li-ion' | null;
   /** Record counts as reported BY the firmware (device-side truth). */
   fw_counts: {
     credentials: number | null;
     shifts: number | null;
     holidays: number | null;
-    door_shifts: number | null;
   };
-  /** v1-era provisioned reader type (0/1/2) — no longer refreshed by the v2
-   *  state sync; kept for rows that still carry it. */
-  config_card_type: number | null;
   /** Momentary-unlock hold time in seconds. */
   latch_interval_s: number | null;
   /** Last successful state poll — freshness of the fields above. */
   state_synced_at: string | null;
+  /**
+   * Hardware profile — provisioning-time facts and the Simkura v2
+   * capability tiers (migration 085). These are what feature gating keys
+   * off: a feature renders live when its capability / feature / supported
+   * value is present, greyed out when the board lacks it. Null on any of
+   * them = never reported; treat as "unknown, assume the SB6 fallback",
+   * not "unsupported".
+   */
+  manufacturer: string | null;
+  /** Hardware revision (not firmware). */
+  hardware_version: string | null;
+  /** Doors this controller manages. Loudin mirrors door 1 only today. */
+  num_doors: number | null;
+  power_type: 'battery' | 'plugin' | null;
+  connectivity_transport: 'cellular' | 'wifi' | 'ethernet' | null;
+  deployed: boolean | null;
+  /** Which capability blocks the device has at all. Additive vocabulary. */
+  capabilities: DeviceCapability[] | null;
+  /** Boolean flags for fields with no value vocabulary, e.g. door-position-sensing. */
+  features: Record<string, boolean> | null;
+  /** Allowed values per enum field, keyed by contract path, e.g.
+   *  "doors.reader.technology" → ['prox', 'smartcard', …]. */
+  supported: Record<string, string[]> | null;
+  /** Card formats this device can actually decode (board ∩ firmware). */
+  card_formats: string[] | null;
   last_seen: string | null;
   created_at: string;
   updated_at: string;
@@ -76,6 +143,7 @@ export interface DeviceSync {
   has_awaiting: boolean;
   credentials: { add: number; submitted: number; remove: number; total: number };
   shifts:      { add: number; submitted: number; remove: number; total: number };
+  holidays:    { add: number; submitted: number; remove: number; total: number };
 }
 
 /** Response from POST /api/devices/:id/push (and /clear, same shape minus
@@ -371,7 +439,9 @@ export interface DeviceShift {
   end_time: string;
   days_of_week: DayOfWeek[];
   status: 'active' | 'inactive';
+  /** Sync trail — see `syncStateOf()` in components/devices/syncState. */
   applied_at: string | null;
+  submitted_at: string | null;
   synced_at: string | null;
   created_at: string;
   updated_at: string;
@@ -406,6 +476,62 @@ export const deviceShiftsApi = {
     api.delete<void, void>(`/api/devices/${deviceId}/shifts/${shiftId}`),
 };
 
+// ── Per-device holidays (date windows that override the schedule) ────────────
+
+/**
+ * What the door does for the whole holiday window. Maps to Simkura's
+ * holidays.add `behavior`: open → unlocked, locked → locked, lockdown →
+ * lockdown. (The schema's 'restricted' custom-hours mode has no firmware
+ * equivalent and is not offered.)
+ */
+export type HolidayBehavior = 'open' | 'locked' | 'lockdown';
+
+export interface DeviceHoliday {
+  id: number;
+  holiday_name: string;
+  description: string | null;
+  /** ISO 8601, UTC. */
+  start_datetime: string;
+  end_datetime: string;
+  access_mode: HolidayBehavior;
+  status: 'active' | 'inactive';
+  /** Sync trail — see `syncStateOf()` in components/devices/syncState. */
+  applied_at: string | null;
+  submitted_at: string | null;
+  synced_at: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface DeviceHolidayPayload {
+  holiday_name: string;
+  description?: string | null;
+  start_datetime: string;
+  end_datetime: string;
+  access_mode: HolidayBehavior;
+  status?: 'active' | 'inactive';
+}
+
+export const deviceHolidaysApi = {
+  list: (deviceId: number) =>
+    api.get<{ holidays: DeviceHoliday[] }, { holidays: DeviceHoliday[] }>(
+      `/api/devices/${deviceId}/holidays`,
+    ).then((r) => r.holidays),
+
+  create: (deviceId: number, payload: DeviceHolidayPayload) =>
+    api.post<{ holiday: DeviceHoliday }, { holiday: DeviceHoliday }>(
+      `/api/devices/${deviceId}/holidays`, payload,
+    ).then((r) => r.holiday),
+
+  update: (deviceId: number, holidayId: number, payload: Partial<DeviceHolidayPayload>) =>
+    api.patch<{ holiday: DeviceHoliday }, { holiday: DeviceHoliday }>(
+      `/api/devices/${deviceId}/holidays/${holidayId}`, payload,
+    ).then((r) => r.holiday),
+
+  remove: (deviceId: number, holidayId: number) =>
+    api.delete<void, void>(`/api/devices/${deviceId}/holidays/${holidayId}`),
+};
+
 // ── Per-device credentials (which credentials are installed on this door) ────
 
 import type { CredentialStatus, CredentialType } from './credentials';
@@ -428,7 +554,9 @@ export interface AttachedCredential {
   facility_code: string | null;
   card_number: string | null;
   status: CredentialStatus;
+  /** Sync trail — see `syncStateOf()` in components/devices/syncState. */
   applied_at: string | null;
+  submitted_at: string | null;
   synced_at: string | null;
 }
 

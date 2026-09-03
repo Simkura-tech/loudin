@@ -38,9 +38,42 @@ const Toolbar = styled.div`
   display: flex;
   align-items: center;
   justify-content: space-between;
+  gap: 8px;
   font-size: 13px;
   color: ${({ theme }) => theme.colors.text.tertiary};
+
+  .right { display: flex; align-items: center; gap: 6px; }
 `;
+
+const FilterSelect = styled.select`
+  height: 28px;
+  padding: 0 8px;
+  border-radius: 7px;
+  border: 1px solid ${({ theme }) => theme.colors.border.light};
+  background: ${({ theme }) => theme.colors.background.primary};
+  color: ${({ theme }) => theme.colors.text.primary};
+  font-size: 12px;
+  font-family: inherit;
+`;
+
+/** Event types the feed knows how to render, for the filter. The API
+ *  accepts any `type`; unknown types still render via the generic
+ *  fallback, they just aren't offered here. */
+const EVENT_TYPE_OPTIONS: { value: string; label: string }[] = [
+  { value: 'access.granted',           label: 'Access granted' },
+  { value: 'access.denied',            label: 'Access denied' },
+  { value: 'lock.state_changed',       label: 'Lock state changes' },
+  { value: 'device.wake',              label: 'Wake-ups' },
+  { value: 'device.sleep',             label: 'Sleep' },
+  { value: 'device.restart',           label: 'Restarts' },
+  { value: 'device.online',            label: 'Came online' },
+  { value: 'device.offline',           label: 'Went offline' },
+  { value: 'command.sent',             label: 'Commands delivered' },
+  { value: 'command.failed',           label: 'Commands failed' },
+  { value: 'health.battery_low',       label: 'Battery low' },
+  { value: 'health.battery_dead',      label: 'Battery dead' },
+  { value: 'health.battery_recovered', label: 'Battery recovered' },
+];
 
 const RefreshButton = styled.button`
   display: inline-flex;
@@ -196,11 +229,19 @@ export function DeviceActivityFeed({ deviceId, refreshKey = 0 }: Props) {
   const [loading, setLoading]   = useState(false);
   const [error, setError]       = useState<string | null>(null);
 
+  // '' = every type. Changing it re-creates fetchPage, which the effect
+  // below treats as "reload from the top".
+  const [type, setType] = useState('');
+
   const fetchPage = useCallback(async (off: number, append = false) => {
     setLoading(true);
     setError(null);
     try {
-      const r = await devicesApi.events(deviceId, { limit: PAGE_SIZE, offset: off });
+      const r = await devicesApi.events(deviceId, {
+        limit: PAGE_SIZE,
+        offset: off,
+        ...(type ? { type } : {}),
+      });
       setTotal(r.total);
       setEvents((prev) => (append && prev ? [...prev, ...r.events] : r.events));
       setOffset(off + r.events.length);
@@ -210,7 +251,7 @@ export function DeviceActivityFeed({ deviceId, refreshKey = 0 }: Props) {
     } finally {
       setLoading(false);
     }
-  }, [deviceId]);
+  }, [deviceId, type]);
 
   useEffect(() => {
     fetchPage(0, false);
@@ -230,17 +271,30 @@ export function DeviceActivityFeed({ deviceId, refreshKey = 0 }: Props) {
         <span>
           {events === null
             ? 'Loading…'
-            : `${total} ${total === 1 ? 'event' : 'events'}`}
+            : `${total} ${total === 1 ? 'event' : 'events'}${type ? ' of this type' : ''}`}
         </span>
-        <RefreshButton
-          type="button"
-          onClick={() => fetchPage(0, false)}
-          disabled={loading}
-          title="Refresh"
-        >
-          <IconRefresh size={14} />
-          Refresh
-        </RefreshButton>
+        <div className="right">
+          <FilterSelect
+            value={type}
+            onChange={(e) => setType(e.target.value)}
+            aria-label="Filter by event type"
+            title="Show only one kind of event"
+          >
+            <option value="">All events</option>
+            {EVENT_TYPE_OPTIONS.map((o) => (
+              <option key={o.value} value={o.value}>{o.label}</option>
+            ))}
+          </FilterSelect>
+          <RefreshButton
+            type="button"
+            onClick={() => fetchPage(0, false)}
+            disabled={loading}
+            title="Refresh"
+          >
+            <IconRefresh size={14} />
+            Refresh
+          </RefreshButton>
+        </div>
       </Toolbar>
 
       {error && <ErrorBanner role="alert">{error}</ErrorBanner>}

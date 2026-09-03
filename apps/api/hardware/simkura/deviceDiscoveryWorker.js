@@ -23,7 +23,15 @@
  */
 
 const { client: simkuraClient } = require('./');
+const { bindValue } = require('./hardwareProfile');
+const boardCatalog = require('./boardCatalog');
 const { query } = require('../../database/db');
+
+// Hardware-profile columns the list spine carries (migration 085). The full
+// resource adds card_formats / power_type / connectivity_transport, which
+// the state-sync worker fills in on its first pass.
+const PROFILE_COLUMNS = ['manufacturer', 'hardware_version', 'num_doors', 'deployed',
+                         'capabilities', 'features', 'supported'];
 
 const INTERVAL_MS    = parseInt(process.env.SIMKURA_DISCOVERY_INTERVAL_MS, 10) || 24 * 60 * 60 * 1000;
 const ENABLED        = process.env.SIMKURA_DISCOVERY_ENABLED !== 'false';
@@ -43,13 +51,16 @@ function defaultName(hwId) {
 /**
  * Map a normalized v2 list item (from simkuraClient.getDevices()) into the
  * row shape our `devices` table expects. The v2 list spine carries live
- * status + lastSeen, so new rows start with real values; door/power detail
- * arrives with the state-sync worker's first pass.
+ * status + lastSeen plus the hardware profile (manufacturer, revision,
+ * door count, capabilities / features / supported), so new rows start with
+ * real values; door/power detail arrives with the state-sync worker's first
+ * pass.
  */
 function rowFromSimkura(s) {
   if (!s?.device_id) return null;
   const STATUSES = new Set(['online', 'offline']); // column CHECK has no 'unknown'
-  return {
+  const profile = s.profile ?? {};
+  const row = {
     device_id:        s.device_id,
     device_type:      s.device_type || 'sb6',
     firmware_version: s.firmware_version || null,
@@ -59,39 +70,35 @@ function rowFromSimkura(s) {
     power_mode:       'active',
     last_seen:        s.last_seen || null,
   };
+  for (const col of PROFILE_COLUMNS) {
+    row[col] = profile[col] ?? null;
+  }
+  return row;
 }
 
 /**
  * Insert one Simkura device as unclaimed. Returns 'inserted' if a new
  * row was created, 'skipped' if a row already existed for that hardware
- * id (claimed or otherwise — we don't touch existing rows).
+ * id (claimed or otherwise — we don't touch existing rows; the state-sync
+ * worker keeps their profile current).
  */
 async function upsertUnclaimed(row) {
+  const cols = ['device_id', 'device_type', 'firmware_version', 'device_name',
+                'status', 'door_state', 'power_mode', 'last_seen', ...PROFILE_COLUMNS];
   const r = await query(
-    `INSERT INTO devices
-       (device_id, device_type, firmware_version, device_name,
-        status, door_state, power_mode, last_seen)
-     VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+    `INSERT INTO devices (${cols.join(', ')})
+     VALUES (${cols.map((_, i) => `$${i + 1}`).join(', ')})
      ON CONFLICT (device_id) DO NOTHING
      RETURNING id`,
-    [
-      row.device_id,
-      row.device_type,
-      row.firmware_version,
-      row.device_name,
-      row.status,
-      row.door_state,
-      row.power_mode,
-      row.last_seen,
-    ]
+    cols.map((col) => bindValue(col, row[col]))
   );
   return r.rowCount > 0 ? 'inserted' : 'skipped';
 }
 
 /**
- * One sync cycle. Pulls every device in the Simkura account and INSERTs
- * any unknowns. Returns counts; throws on upstream failure (the timer
- * loop catches and logs).
+ * One sync cycle. Refreshes the board catalog, then pulls every device in
+ * the Simkura account and INSERTs any unknowns. Returns counts; throws on
+ * upstream failure (the timer loop catches and logs).
  */
 async function tick() {
   if (running) return { fetched: 0, inserted: 0, skipped: 0, busy: true };
@@ -99,6 +106,16 @@ async function tick() {
   try {
     if (!simkuraClient.isAvailable()) {
       return { fetched: 0, inserted: 0, skipped: 0, skipped_reason: 'not_configured' };
+    }
+
+    // Board catalog first: it is what a device row falls back to for
+    // feature gating, so it should exist before the device does. A catalog
+    // failure is logged but never blocks device discovery.
+    let boards = 0;
+    try {
+      boards = await boardCatalog.refreshFromSimkura(simkuraClient);
+    } catch (err) {
+      console.error('[simkura-discovery] board catalog refresh failed:', err.message);
     }
 
     const { devices } = await simkuraClient.getDevices();
@@ -121,9 +138,9 @@ async function tick() {
 
     lastLoggedError = null;
     if (inserted > 0 || process.env.NODE_ENV !== 'production') {
-      console.log(`[simkura-discovery] ${list.length} from Simkura · ${inserted} new · ${skipped} already known`);
+      console.log(`[simkura-discovery] ${list.length} from Simkura · ${inserted} new · ${skipped} already known · ${boards} board(s) in catalog`);
     }
-    return { fetched: list.length, inserted, skipped };
+    return { fetched: list.length, inserted, skipped, boards };
   } catch (err) {
     const msg = err.message || String(err);
     if (msg !== lastLoggedError) {

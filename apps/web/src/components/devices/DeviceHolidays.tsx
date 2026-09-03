@@ -1,22 +1,22 @@
 /**
- * DeviceSchedules — per-device list + CRUD for auto-unlock windows.
+ * DeviceHolidays — per-device list + CRUD for date-window overrides.
  *
- * Each schedule names a recurring window (days-of-week + start/end time).
- * Storage is the company-scoped `shifts` table joined to the device via
- * `device_shifts`; the UI presents one row per assignment.
+ * A holiday is a start/end date-time and what the door does in between:
+ * held unlocked, locked (credentials still work, no auto-unlock), or in
+ * lockdown. Storage is the company-scoped `holidays` table joined to the
+ * device via `device_holidays`; the UI presents one row per assignment.
  *
  * Changes reach the lock via the explicit "Update device" push
- * (shifts.add / schedule.set) — a saved schedule is recorded immediately
- * and enforced on the lock after the next push.
+ * (holidays.clear + holidays.add) — a saved holiday is recorded immediately
+ * and enforced on the lock after the next push. Same shape as
+ * DeviceSchedules on purpose.
  */
 
 import { useCallback, useEffect, useState } from 'react';
 import styled from '@emotion/styled';
-import { SyncChip } from './SyncChip';
-import { syncStateOf } from './syncState';
 import {
+  IconCalendarEvent,
   IconCheck,
-  IconClock,
   IconEdit,
   IconPlus,
   IconTrash,
@@ -24,11 +24,13 @@ import {
 } from '@tabler/icons-react';
 
 import {
-  deviceShiftsApi,
-  type DayOfWeek,
-  type DeviceShift,
-  type DeviceShiftPayload,
+  deviceHolidaysApi,
+  type DeviceHoliday,
+  type DeviceHolidayPayload,
+  type HolidayBehavior,
 } from '../../services/access/devices';
+import { SyncChip } from './SyncChip';
+import { syncStateOf } from './syncState';
 
 // ── Layout ────────────────────────────────────────────────────────────────────
 
@@ -139,12 +141,13 @@ const Empty = styled.div`
   }
 `;
 
-const Row = styled.div`
+const Row = styled.div<{ $past?: boolean }>`
   display: flex;
   align-items: center;
   justify-content: space-between;
   padding: 12px 16px;
   border-bottom: 1px solid ${({ theme }) => theme.colors.border.light};
+  opacity: ${({ $past }) => ($past ? 0.6 : 1)};
 
   &:last-of-type { border-bottom: none; }
 
@@ -174,21 +177,22 @@ const Row = styled.div`
   }
 `;
 
-const DayChip = styled.span<{ $on: boolean }>`
+const BehaviorChip = styled.span<{ $mode: HolidayBehavior }>`
   display: inline-flex;
   align-items: center;
-  justify-content: center;
-  min-width: 22px;
-  height: 18px;
-  padding: 0 5px;
+  padding: 2px 7px;
   border-radius: 4px;
-  font-size: 10px;
+  font-size: 10.5px;
   font-weight: 600;
   letter-spacing: 0.02em;
-  background: ${({ theme, $on }) =>
-    $on ? theme.colors.brand.primary + '1f' : theme.colors.background.secondary};
-  color: ${({ theme, $on }) =>
-    $on ? theme.colors.brand.primary : theme.colors.text.tertiary};
+  background: ${({ $mode }) =>
+    $mode === 'open'     ? '#dcfce7'
+  : $mode === 'lockdown' ? '#fee2e2'
+  :                        '#f1f5f9'};
+  color: ${({ $mode }) =>
+    $mode === 'open'     ? '#166534'
+  : $mode === 'lockdown' ? '#991b1b'
+  :                        '#475569'};
 `;
 
 const ErrorBanner = styled.div`
@@ -257,21 +261,30 @@ const FieldLabel = styled.span`
   font-weight: 500;
 `;
 
-const Input = styled.input`
+const FieldHint = styled.span`
+  font-size: 11.5px;
+  line-height: 1.4;
+  color: ${({ theme }) => theme.colors.text.tertiary};
+`;
+
+const inputStyle = (theme: { colors: { border: { light: string }; background: { primary: string }; brand: { primary: string } } }) => `
   height: 32px;
   padding: 0 10px;
   border-radius: 7px;
-  border: 1px solid ${({ theme }) => theme.colors.border.light};
-  background: ${({ theme }) => theme.colors.background.primary};
+  border: 1px solid ${theme.colors.border.light};
+  background: ${theme.colors.background.primary};
   font-size: 13px;
   font-family: inherit;
 
   &:focus {
     outline: none;
-    border-color: ${({ theme }) => theme.colors.brand.primary};
-    box-shadow: 0 0 0 3px ${({ theme }) => theme.colors.brand.primary}26;
+    border-color: ${theme.colors.brand.primary};
+    box-shadow: 0 0 0 3px ${theme.colors.brand.primary}26;
   }
 `;
+
+const Input = styled.input`${({ theme }) => inputStyle(theme)}`;
+const Select = styled.select`${({ theme }) => inputStyle(theme)}`;
 
 const Row2 = styled.div`
   display: grid;
@@ -279,58 +292,53 @@ const Row2 = styled.div`
   gap: 10px;
 `;
 
-const DayPicker = styled.div`
-  display: flex;
-  gap: 6px;
-  flex-wrap: wrap;
-`;
+// ── Helpers ──────────────────────────────────────────────────────────────────
 
-const DayToggle = styled.button<{ $on: boolean }>`
-  height: 30px;
-  min-width: 38px;
-  padding: 0 8px;
-  border-radius: 7px;
-  border: 1px solid ${({ theme, $on }) =>
-    $on ? theme.colors.brand.primary : theme.colors.border.light};
-  background: ${({ theme, $on }) =>
-    $on ? theme.colors.brand.primary + '14' : theme.colors.background.primary};
-  color: ${({ theme, $on }) =>
-    $on ? theme.colors.brand.primary : theme.colors.text.secondary};
-  font-size: 12px;
-  font-weight: 600;
-  font-family: inherit;
-  cursor: pointer;
-
-  &:hover { border-color: ${({ theme }) => theme.colors.brand.primary}; }
-`;
-
-// ── Day-of-week helpers ──────────────────────────────────────────────────────
-
-// 0=Sun … 6=Sat, but we render Mon-first for readability.
-const DAY_ORDER: DayOfWeek[] = [1, 2, 3, 4, 5, 6, 0];
-const DAY_LABEL: Record<DayOfWeek, string> = {
-  0: 'Sun', 1: 'Mon', 2: 'Tue', 3: 'Wed', 4: 'Thu', 5: 'Fri', 6: 'Sat',
+const BEHAVIOR: Record<HolidayBehavior, { label: string; hint: string }> = {
+  locked: {
+    label: 'Locked',
+    hint:  'The door stays locked for the window. Credentials still open it; any auto-unlock schedule is suspended.',
+  },
+  open: {
+    label: 'Unlocked',
+    hint:  'The door is held unlocked for the whole window.',
+  },
+  lockdown: {
+    label: 'Lockdown',
+    hint:  'The door is pinned locked. No PIN, card, or schedule opens it until the window ends.',
+  },
 };
+const BEHAVIOR_ORDER: HolidayBehavior[] = ['locked', 'open', 'lockdown'];
 
-function summariseDays(days: DayOfWeek[]): string {
-  if (days.length === 7) return 'Every day';
-  const set = new Set(days);
-  const weekday = [1, 2, 3, 4, 5].every((d) => set.has(d as DayOfWeek)) && set.size === 5;
-  if (weekday) return 'Weekdays';
-  const weekend = set.has(0) && set.has(6) && set.size === 2;
-  if (weekend) return 'Weekends';
-  return DAY_ORDER.filter((d) => set.has(d)).map((d) => DAY_LABEL[d]).join(' · ');
+/** ISO (UTC) → the value a datetime-local input wants, in local time. */
+function toLocalInput(iso: string): string {
+  const d = new Date(iso);
+  const pad = (n: number) => String(n).padStart(2, '0');
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`;
 }
 
-function formatTime(t: string): string {
-  // 'HH:MM' or 'HH:MM:SS' → 'HH:MM'.
-  return t.length >= 5 ? t.slice(0, 5) : t;
+/** datetime-local value (local time) → ISO UTC. '' → null. */
+function fromLocalInput(v: string): string | null {
+  if (!v) return null;
+  const t = new Date(v).getTime();
+  return Number.isFinite(t) ? new Date(t).toISOString() : null;
 }
 
-function formatWindow(start: string, end: string): string {
-  return `${formatTime(start)} – ${formatTime(end)}${
-    formatTime(start) > formatTime(end) ? ' (next day)' : ''
-  }`;
+const RANGE_FMT = new Intl.DateTimeFormat(undefined, {
+  day: 'numeric', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit',
+});
+
+function formatRange(start: string, end: string): string {
+  return `${RANGE_FMT.format(new Date(start))} – ${RANGE_FMT.format(new Date(end))}`;
+}
+
+function defaultWindow(): { start: string; end: string } {
+  const start = new Date();
+  start.setDate(start.getDate() + 1);
+  start.setHours(0, 0, 0, 0);
+  const end = new Date(start);
+  end.setDate(end.getDate() + 1);
+  return { start: toLocalInput(start.toISOString()), end: toLocalInput(end.toISOString()) };
 }
 
 // ── Component ────────────────────────────────────────────────────────────────
@@ -343,30 +351,30 @@ interface Props {
   onChanged?: () => void;
 }
 
-const EMPTY_FORM: DeviceShiftPayload = {
-  shift_name:   '',
-  start_time:   '09:00',
-  end_time:     '17:00',
-  days_of_week: [1, 2, 3, 4, 5],
-};
+interface Form {
+  holiday_name: string;
+  /** datetime-local values (local time). */
+  start: string;
+  end: string;
+  access_mode: HolidayBehavior;
+}
 
-export function DeviceSchedules({ deviceId, canEdit, onChanged }: Props) {
-  const [shifts, setShifts]   = useState<DeviceShift[] | null>(null);
-  const [error,  setError]    = useState<string | null>(null);
-  const [editing, setEditing] = useState<DeviceShift | null>(null);
+export function DeviceHolidays({ deviceId, canEdit, onChanged }: Props) {
+  const [holidays, setHolidays] = useState<DeviceHoliday[] | null>(null);
+  const [error,  setError]      = useState<string | null>(null);
+  const [editing, setEditing]   = useState<DeviceHoliday | null>(null);
   const [modalOpen, setModalOpen] = useState(false);
-  const [form,   setForm]     = useState<DeviceShiftPayload>(EMPTY_FORM);
-  const [saving, setSaving]   = useState(false);
+  const [form,   setForm]       = useState<Form>({ holiday_name: '', access_mode: 'locked', ...defaultWindow() });
+  const [saving, setSaving]     = useState(false);
   const [saveError, setSaveError] = useState<string | null>(null);
 
   const load = useCallback(async () => {
     setError(null);
     try {
-      const list = await deviceShiftsApi.list(deviceId);
-      setShifts(list);
+      setHolidays(await deviceHolidaysApi.list(deviceId));
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Failed to load schedules');
-      setShifts([]);
+      setError(err instanceof Error ? err.message : 'Failed to load holidays');
+      setHolidays([]);
     }
   }, [deviceId]);
 
@@ -374,52 +382,44 @@ export function DeviceSchedules({ deviceId, canEdit, onChanged }: Props) {
 
   const openCreate = () => {
     setEditing(null);
-    setForm(EMPTY_FORM);
+    setForm({ holiday_name: '', access_mode: 'locked', ...defaultWindow() });
     setSaveError(null);
     setModalOpen(true);
   };
 
-  const openEdit = (s: DeviceShift) => {
-    setEditing(s);
+  const openEdit = (h: DeviceHoliday) => {
+    setEditing(h);
     setForm({
-      shift_name:   s.shift_name,
-      description:  s.description,
-      start_time:   formatTime(s.start_time),
-      end_time:     formatTime(s.end_time),
-      days_of_week: s.days_of_week,
+      holiday_name: h.holiday_name,
+      start:        toLocalInput(h.start_datetime),
+      end:          toLocalInput(h.end_datetime),
+      access_mode:  h.access_mode,
     });
     setSaveError(null);
     setModalOpen(true);
-  };
-
-  const toggleDay = (d: DayOfWeek) => {
-    setForm((f) => {
-      const set = new Set(f.days_of_week);
-      if (set.has(d)) set.delete(d); else set.add(d);
-      return { ...f, days_of_week: [...set].sort((a, b) => a - b) as DayOfWeek[] };
-    });
   };
 
   const handleSave = async (e: React.FormEvent) => {
     e.preventDefault();
     setSaveError(null);
 
-    const name = form.shift_name.trim();
+    const name = form.holiday_name.trim();
     if (!name) { setSaveError('Name is required'); return; }
-    if (form.days_of_week.length === 0) { setSaveError('Pick at least one day'); return; }
-    if (form.start_time === form.end_time) { setSaveError('Start and end time cannot be equal'); return; }
+    const start = fromLocalInput(form.start);
+    const end   = fromLocalInput(form.end);
+    if (!start || !end) { setSaveError('Start and end are required'); return; }
+    if (end <= start) { setSaveError('End must be after start'); return; }
 
     setSaving(true);
     try {
-      const payload: DeviceShiftPayload = {
-        shift_name:   name,
-        description:  form.description?.toString().trim() || null,
-        start_time:   form.start_time,
-        end_time:     form.end_time,
-        days_of_week: form.days_of_week,
+      const payload: DeviceHolidayPayload = {
+        holiday_name:   name,
+        start_datetime: start,
+        end_datetime:   end,
+        access_mode:    form.access_mode,
       };
-      if (editing) await deviceShiftsApi.update(deviceId, editing.id, payload);
-      else         await deviceShiftsApi.create(deviceId, payload);
+      if (editing) await deviceHolidaysApi.update(deviceId, editing.id, payload);
+      else         await deviceHolidaysApi.create(deviceId, payload);
       setModalOpen(false);
       await load();
       onChanged?.();
@@ -430,10 +430,10 @@ export function DeviceSchedules({ deviceId, canEdit, onChanged }: Props) {
     }
   };
 
-  const handleDelete = async (s: DeviceShift) => {
-    if (!window.confirm(`Delete schedule "${s.shift_name}"?`)) return;
+  const handleDelete = async (h: DeviceHoliday) => {
+    if (!window.confirm(`Delete holiday "${h.holiday_name}"?`)) return;
     try {
-      await deviceShiftsApi.remove(deviceId, s.id);
+      await deviceHolidaysApi.remove(deviceId, h.id);
       await load();
       onChanged?.();
     } catch (err) {
@@ -441,67 +441,72 @@ export function DeviceSchedules({ deviceId, canEdit, onChanged }: Props) {
     }
   };
 
+  const now = Date.now();
+
   return (
     <Panel>
       <PanelHeader>
-        <h2>Schedules</h2>
+        <h2>Holidays</h2>
         {canEdit && (
           <PrimaryButton type="button" onClick={openCreate}>
-            <IconPlus size={14} /> New schedule
+            <IconPlus size={14} /> New holiday
           </PrimaryButton>
         )}
       </PanelHeader>
 
       <Description>
-        Schedules tell this lock when to automatically unlock. During a scheduled
-        window the door stays open for everyone; outside it, normal access
-        (cards, PINs, the app) is required. Changes reach the lock when you push
-        an update to the device.
+        Holidays override the normal schedule for a date range — keep the
+        door locked over a public holiday, hold it open for an event, or
+        lock it down entirely. {canEdit
+          ? 'A saved holiday is enforced on the lock after the next device update.'
+          : 'An admin manages the holidays on this door.'}
       </Description>
 
       {error && <ErrorBanner role="alert">{error}</ErrorBanner>}
 
-      {shifts === null ? (
+      {holidays === null ? (
         <Empty>Loading…</Empty>
-      ) : shifts.length === 0 ? (
+      ) : holidays.length === 0 ? (
         <Empty>
-          <div className="title">No schedules</div>
+          <div className="title">No holidays</div>
           <div>
             {canEdit
-              ? 'Add one to set days and times when this lock auto-unlocks.'
-              : 'Nothing has been scheduled for this lock.'}
+              ? 'Add one to change how this door behaves over a date range.'
+              : 'No date-range overrides are set for this lock.'}
           </div>
         </Empty>
       ) : (
-        shifts.map((s) => (
-          <Row key={s.id}>
-            <div className="left">
-              <span className="crest"><IconClock size={16} /></span>
-              <div style={{ minWidth: 0 }}>
-                <div className="name">{s.shift_name}</div>
-                <div className="meta">
-                  <span>{formatWindow(s.start_time, s.end_time)}</span>
-                  <span>·</span>
-                  <span>{summariseDays(s.days_of_week)}</span>
-                  {DAY_ORDER.map((d) => (
-                    <DayChip key={d} $on={s.days_of_week.includes(d)}>{DAY_LABEL[d][0]}</DayChip>
-                  ))}
-                  <SyncChip state={syncStateOf(s)} />
+        holidays.map((h) => {
+          const past = Date.parse(h.end_datetime) < now;
+          return (
+            <Row key={h.id} $past={past}>
+              <div className="left">
+                <span className="crest"><IconCalendarEvent size={16} /></span>
+                <div style={{ minWidth: 0 }}>
+                  <div className="name">{h.holiday_name}</div>
+                  <div className="meta">
+                    <span>{formatRange(h.start_datetime, h.end_datetime)}</span>
+                    {past && <span>· ended</span>}
+                    <BehaviorChip $mode={h.access_mode} title={BEHAVIOR[h.access_mode].hint}>
+                      {BEHAVIOR[h.access_mode].label}
+                    </BehaviorChip>
+                    <SyncChip state={syncStateOf(h)} />
+                  </div>
                 </div>
               </div>
-            </div>
-            {canEdit && (
-              <div className="actions">
-                <IconButton type="button" onClick={() => openEdit(s)} title="Edit">
-                  <IconEdit size={14} />
-                </IconButton>
-                <IconButton type="button" onClick={() => handleDelete(s)} title="Delete">
-                  <IconTrash size={14} />
-                </IconButton>
-              </div>
-            )}
-          </Row>
-        ))
+              {canEdit && (
+                <div className="actions">
+                  <IconButton type="button" onClick={() => openEdit(h)} title="Edit">
+                    <IconEdit size={14} />
+                  </IconButton>
+                  <IconButton type="button" onClick={() => handleDelete(h)} title="Delete">
+                    <IconTrash size={14} />
+                  </IconButton>
+                </div>
+              )}
+            </Row>
+          );
+        })
       )}
 
       {modalOpen && (
@@ -509,7 +514,7 @@ export function DeviceSchedules({ deviceId, canEdit, onChanged }: Props) {
           <Dialog>
             <form onSubmit={handleSave}>
               <DialogHeader>
-                <h2>{editing ? 'Edit schedule' : 'New schedule'}</h2>
+                <h2>{editing ? 'Edit holiday' : 'New holiday'}</h2>
                 <IconButton type="button" onClick={() => setModalOpen(false)}>
                   <IconX size={16} />
                 </IconButton>
@@ -518,46 +523,43 @@ export function DeviceSchedules({ deviceId, canEdit, onChanged }: Props) {
                 <Field>
                   <FieldLabel>Name *</FieldLabel>
                   <Input
-                    value={form.shift_name}
-                    onChange={(e) => setForm({ ...form, shift_name: e.target.value })}
-                    placeholder="e.g. Business hours"
+                    value={form.holiday_name}
+                    onChange={(e) => setForm({ ...form, holiday_name: e.target.value })}
+                    placeholder="e.g. Christmas closure"
                     autoFocus required maxLength={255}
                   />
                 </Field>
                 <Row2>
                   <Field>
-                    <FieldLabel>Start time *</FieldLabel>
+                    <FieldLabel>Starts *</FieldLabel>
                     <Input
-                      type="time"
-                      value={form.start_time}
-                      onChange={(e) => setForm({ ...form, start_time: e.target.value })}
+                      type="datetime-local"
+                      value={form.start}
+                      onChange={(e) => setForm({ ...form, start: e.target.value })}
                       required
                     />
                   </Field>
                   <Field>
-                    <FieldLabel>End time *</FieldLabel>
+                    <FieldLabel>Ends *</FieldLabel>
                     <Input
-                      type="time"
-                      value={form.end_time}
-                      onChange={(e) => setForm({ ...form, end_time: e.target.value })}
+                      type="datetime-local"
+                      value={form.end}
+                      onChange={(e) => setForm({ ...form, end: e.target.value })}
                       required
                     />
                   </Field>
                 </Row2>
                 <Field>
-                  <FieldLabel>Days *</FieldLabel>
-                  <DayPicker>
-                    {DAY_ORDER.map((d) => (
-                      <DayToggle
-                        key={d}
-                        type="button"
-                        $on={form.days_of_week.includes(d)}
-                        onClick={() => toggleDay(d)}
-                      >
-                        {DAY_LABEL[d]}
-                      </DayToggle>
+                  <FieldLabel>Door behavior</FieldLabel>
+                  <Select
+                    value={form.access_mode}
+                    onChange={(e) => setForm({ ...form, access_mode: e.target.value as HolidayBehavior })}
+                  >
+                    {BEHAVIOR_ORDER.map((m) => (
+                      <option key={m} value={m}>{BEHAVIOR[m].label}</option>
                     ))}
-                  </DayPicker>
+                  </Select>
+                  <FieldHint>{BEHAVIOR[form.access_mode].hint}</FieldHint>
                 </Field>
                 {saveError && <ErrorBanner style={{ margin: 0 }}>{saveError}</ErrorBanner>}
               </DialogBody>
@@ -585,4 +587,4 @@ export function DeviceSchedules({ deviceId, canEdit, onChanged }: Props) {
   );
 }
 
-export default DeviceSchedules;
+export default DeviceHolidays;

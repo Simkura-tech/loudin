@@ -13,6 +13,7 @@ import { ThemeProvider } from '@emotion/react';
 import { branding } from './branding';
 import { lightTheme, GlobalStyles } from './theme';
 import { AuthProvider } from './contexts/AuthContext';
+import { FeaturesProvider } from './contexts/FeaturesContext';
 import ProtectedRoute from './components/auth/ProtectedRoute';
 import NotFoundPage from './pages/marketing/NotFoundPage';
 import LoginPage from './pages/auth/LoginPage';
@@ -36,6 +37,7 @@ import SecuritySettings from './pages/app/settings/SecuritySettings';
 import PlatformApiKeysPage from './pages/app/PlatformApiKeysPage';
 import IntegrationsPage from './pages/app/platform/IntegrationsPage';
 import IntegrationDetailPage from './pages/app/platform/IntegrationDetailPage';
+import FeaturesPage from './pages/app/platform/FeaturesPage';
 import TermsPage from './pages/legal/TermsPage';
 import PrivacyPage from './pages/legal/PrivacyPage';
 import './styles/index.css';
@@ -53,6 +55,7 @@ function App() {
       <GlobalStyles />
       <Router>
         <AuthProvider>
+          <FeaturesProvider>
           <Routes>
             <Route path="/" element={<Navigate to="/login" replace />} />
             <Route path="/login" element={<LoginPage />} />
@@ -83,6 +86,7 @@ function App() {
               <Route path="platform/api-keys" element={<PlatformApiKeysPage />} />
               <Route path="platform/integrations" element={<IntegrationsPage />} />
               <Route path="platform/integrations/:name" element={<IntegrationDetailPage />} />
+              <Route path="platform/features" element={<FeaturesPage />} />
               <Route path="settings" element={<SettingsLayout />}>
                 <Route index element={<Navigate to="workspace" replace />} />
                 <Route path="workspace" element={<WorkspaceSettings />} />
@@ -93,6 +97,7 @@ function App() {
 
             <Route path="*" element={<NotFoundPage />} />
           </Routes>
+        </FeaturesProvider>
         </AuthProvider>
       </Router>
     </ThemeProvider>

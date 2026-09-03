@@ -352,10 +352,33 @@ async function applyEventToDeviceState(payload, companyId = null) {
 
   switch (payload.event_type) {
     case 'lock.state_changed': {
+      // v2 codes 4–9 → (lockState, override, trigger). 'normal' (code 9)
+      // means an admin cleared the override: the door is back on its
+      // schedule and its physical state arrives with the next shift event,
+      // so only the override columns move. A holiday override is never
+      // signalled here — the state sync sets door_override_mode='holiday'.
       const numericMap = { 0: 'locked', 1: 'unlocked', 2: 'lockdown' };
       const newState = data.lockState || numericMap[data.state];
-      if (!['locked', 'unlocked', 'lockdown'].includes(newState)) return;
-      await bumpLiveness(hwId, 'door_state = $2', [newState]);
+      const sets = [];
+      const params = [];
+      const set = (col, value) => { params.push(value); sets.push(`${col} = $${params.length + 1}`); };
+
+      if (newState === 'normal' || data.code === 9) {
+        set('door_override', false);
+        set('door_override_mode', 'none');
+      } else if (['locked', 'unlocked', 'lockdown'].includes(newState)) {
+        set('door_state', newState);
+        const override = typeof data.override === 'boolean'
+          ? data.override
+          : newState === 'lockdown' ? true : null;
+        if (override != null) {
+          set('door_override', override);
+          set('door_override_mode', override ? 'command' : 'none');
+        }
+      } else {
+        return;
+      }
+      await bumpLiveness(hwId, sets.join(', '), params);
       return;
     }
     case 'device.wake':

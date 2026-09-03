@@ -14,10 +14,28 @@
 const { query } = require('../../database/db');
 const { recordAudit } = require('../../services/platform/audit');
 const { upstreamErrorMessage } = require('../../hardware/simkura');
+const { profileFromResource, bindValue } = require('../../hardware/simkura/hardwareProfile');
+const boardCatalog = require('../../hardware/simkura/boardCatalog');
 const events = require('../../integrations/events');
 
 const ALLOWED_STATUSES = ['online', 'offline', 'error', 'maintenance'];
 const MAX_LIMIT = 200;
+
+// Every column publicDevice() reads — one list so SELECT / RETURNING can't
+// drift from the projection.
+const DEVICE_COLUMNS = `
+  id, device_id, device_type, firmware_version,
+  device_name, location, notes,
+  status, door_state, door_position, door_override, door_override_mode,
+  battery_percent, battery_health, power_mode,
+  carrier, signal_strength,
+  reader_protocol, reader_connection, reader_technology, battery_chemistry,
+  fw_credential_count, fw_shift_count, fw_holiday_count,
+  latch_interval_s, state_synced_at,
+  manufacturer, hardware_version, num_doors, power_type, connectivity_transport, deployed,
+  capabilities, features, supported, card_formats,
+  last_seen, created_at, updated_at,
+  deleted_at, released_at, released_by`;
 
 // Only the human-facing labels are editable from the end-user-admin UI.
 // device_id, firmware_version, live-state fields, and the reseller/assignment
@@ -33,8 +51,16 @@ function notFound(res) {
   return res.status(404).json({ error: 'Not Found', message: 'Device not found' });
 }
 
-function publicDevice(row) {
+/**
+ * API shape for a device row. `board` is the row's entry in the local
+ * hardware catalog (device_boards, resolved by manufacturer + device_type)
+ * — the display name and the fallback capability tiers for a device whose
+ * own tiers are still NULL. Pass the resolved catalog row, or nothing for
+ * `board: null`.
+ */
+function publicDevice(row, board = null) {
   return {
+    board:             boardCatalog.publicBoard(board),
     id:                row.id,
     device_id:         row.device_id,
     device_type:       row.device_type,
@@ -45,23 +71,43 @@ function publicDevice(row) {
     status:            row.status,
     door_state:        row.door_state,
     battery_percent:   row.battery_percent,
+    // ok | low | dead — dead means safe mode, the motor cannot actuate.
+    battery_health:    row.battery_health ?? null,
     power_mode:        row.power_mode,
     carrier:           row.carrier ?? null,
     signal_strength:   row.signal_strength ?? null,
-    // Richer state mirrored from Simkura's /state poll (migration 074).
-    // NULL = not reported yet (old firmware / never polled).
-    door_override:         row.door_override ?? null,
-    deep_sleep_duration_s: row.deep_sleep_duration_s ?? null,
-    osdp_stage:            row.osdp_stage ?? null,
+    // Richer state mirrored from the v2 device resource by the state-sync
+    // poll (migrations 074, 087). NULL = not reported yet / not applicable.
+    door_override:     row.door_override ?? null,
+    // none | command | holiday — what is overriding the schedule, if anything.
+    door_override_mode: row.door_override_mode ?? null,
+    door_position:     row.door_position ?? null,
+    reader: {
+      protocol:   row.reader_protocol ?? null,
+      connection: row.reader_connection ?? null,
+      technology: row.reader_technology ?? null,
+    },
+    battery_chemistry: row.battery_chemistry ?? null,
     fw_counts: {
       credentials: row.fw_credential_count ?? null,
       shifts:      row.fw_shift_count ?? null,
       holidays:    row.fw_holiday_count ?? null,
-      door_shifts: row.fw_door_shift_count ?? null,
     },
-    config_card_type:  row.config_card_type ?? null,
     latch_interval_s:  row.latch_interval_s ?? null,
     state_synced_at:   row.state_synced_at ?? null,
+    // Hardware profile (migration 085): provisioning-time facts and the
+    // v2 capability tiers the UI gates features on. NULL = never reported
+    // (treat as "unknown, assume the SB6 fallback", not "unsupported").
+    manufacturer:           row.manufacturer ?? null,
+    hardware_version:       row.hardware_version ?? null,
+    num_doors:              row.num_doors ?? null,
+    power_type:             row.power_type ?? null,
+    connectivity_transport: row.connectivity_transport ?? null,
+    deployed:               row.deployed ?? null,
+    capabilities:           row.capabilities ?? null,
+    features:               row.features ?? null,
+    supported:              row.supported ?? null,
+    card_formats:           row.card_formats ?? null,
     last_seen:         row.last_seen,
     created_at:        row.created_at,
     updated_at:        row.updated_at,
@@ -72,6 +118,12 @@ function publicDevice(row) {
     released_at:       row.released_at ?? null,
     released_by:       row.released_by ?? null,
   };
+}
+
+/** publicDevice() with the board resolved from the (cached) catalog. */
+async function withBoard(row) {
+  const catalog = await boardCatalog.load();
+  return publicDevice(row, catalog.resolve(row));
 }
 
 // â”€â”€ GET /api/devices â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
@@ -111,16 +163,7 @@ async function list(req, res, next) {
 
     const [{ rows }, { rows: countRows }] = await Promise.all([
       query(
-        `SELECT id, device_id, device_type, firmware_version,
-                device_name, location, notes,
-                status, door_state, battery_percent, power_mode,
-                carrier, signal_strength,
-                door_override, deep_sleep_duration_s, osdp_stage,
-                fw_credential_count, fw_shift_count,
-                fw_holiday_count, fw_door_shift_count,
-                config_card_type, latch_interval_s, state_synced_at,
-                last_seen, created_at, updated_at,
-                deleted_at, released_at, released_by
+        `SELECT ${DEVICE_COLUMNS}
            FROM devices
           WHERE ${where}
           ORDER BY deleted_at IS NOT NULL, device_name
@@ -130,7 +173,11 @@ async function list(req, res, next) {
       query(`SELECT COUNT(*)::int AS n FROM devices WHERE ${where}`, filterParams),
     ]);
 
-    return res.json({ devices: rows.map(publicDevice), total: countRows[0].n, limit, offset });
+    const catalog = await boardCatalog.load();
+    return res.json({
+      devices: rows.map((r) => publicDevice(r, catalog.resolve(r))),
+      total: countRows[0].n, limit, offset,
+    });
   } catch (err) {
     return next(err);
   }
@@ -166,16 +213,7 @@ async function get(req, res, next) {
     // when they were released. Admin mutation routes still 404 because they
     // re-select with `deleted_at IS NULL` themselves.
     const { rows } = await query(
-      `SELECT id, device_id, device_type, firmware_version,
-              device_name, location, notes,
-              status, door_state, battery_percent, power_mode,
-              carrier, signal_strength,
-              door_override, deep_sleep_duration_s, osdp_stage,
-              fw_credential_count, fw_shift_count,
-              fw_holiday_count, fw_door_shift_count,
-              config_card_type, latch_interval_s, state_synced_at,
-              last_seen, created_at, updated_at,
-              deleted_at, released_at, released_by
+      `SELECT ${DEVICE_COLUMNS}
          FROM devices
         WHERE id = $1 AND company_id = $2`,
       [deviceId, companyId]
@@ -199,60 +237,48 @@ async function get(req, res, next) {
     //               or the state-sync reconcile sees the record 'sent' —
     //               see services/access/commandAck.js
     //   remove    — soft-deleted, firmware still has it cached
-    const [{ rows: [credCounts] }, { rows: [shiftCounts] }] = await Promise.all([
-      query(
-        `SELECT
-           COUNT(*) FILTER (WHERE deleted_at IS NULL
-                              AND submitted_at IS NULL
-                              AND (synced_at IS NULL OR synced_at < applied_at))::int AS add_count,
-           COUNT(*) FILTER (WHERE deleted_at IS NULL
-                              AND submitted_at IS NOT NULL
-                              AND synced_at IS NULL)::int                              AS submitted_count,
-           COUNT(*) FILTER (WHERE deleted_at IS NOT NULL)::int AS remove_count,
-           COUNT(*) FILTER (WHERE deleted_at IS NULL)::int     AS total_count
-         FROM device_credentials
-         WHERE device_id = $1`,
-        [deviceId]
-      ),
-      query(
-        `SELECT
-           COUNT(*) FILTER (WHERE deleted_at IS NULL
-                              AND submitted_at IS NULL
-                              AND (synced_at IS NULL OR synced_at < applied_at))::int AS add_count,
-           COUNT(*) FILTER (WHERE deleted_at IS NULL
-                              AND submitted_at IS NOT NULL
-                              AND synced_at IS NULL)::int                              AS submitted_count,
-           COUNT(*) FILTER (WHERE deleted_at IS NOT NULL)::int AS remove_count,
-           COUNT(*) FILTER (WHERE deleted_at IS NULL)::int     AS total_count
-         FROM device_shifts
-         WHERE device_id = $1`,
-        [deviceId]
-      ),
+    // Same predicate for all three junctions (credentials, shifts, holidays)
+    // — and the same one devicePush.delta() uses to decide what to send.
+    const countsFor = (table) => query(
+      `SELECT
+         COUNT(*) FILTER (WHERE deleted_at IS NULL
+                            AND submitted_at IS NULL
+                            AND (synced_at IS NULL OR synced_at < applied_at))::int AS add_count,
+         COUNT(*) FILTER (WHERE deleted_at IS NULL
+                            AND submitted_at IS NOT NULL
+                            AND synced_at IS NULL)::int                              AS submitted_count,
+         COUNT(*) FILTER (WHERE deleted_at IS NOT NULL)::int AS remove_count,
+         COUNT(*) FILTER (WHERE deleted_at IS NULL)::int     AS total_count
+       FROM ${table}
+       WHERE device_id = $1`,
+      [deviceId]
+    ).then((r) => r.rows[0]);
+
+    const [credCounts, shiftCounts, holidayCounts] = await Promise.all([
+      countsFor('device_credentials'),
+      countsFor('device_shifts'),
+      countsFor('device_holidays'),
     ]);
 
+    const shape = (c) => ({
+      add:       c.add_count,
+      submitted: c.submitted_count,
+      remove:    c.remove_count,
+      total:     c.total_count,
+    });
+    const all = [credCounts, shiftCounts, holidayCounts];
+
     const sync = {
-      credentials: {
-        add:       credCounts.add_count,
-        submitted: credCounts.submitted_count,
-        remove:    credCounts.remove_count,
-        total:     credCounts.total_count,
-      },
-      shifts: {
-        add:       shiftCounts.add_count,
-        submitted: shiftCounts.submitted_count,
-        remove:    shiftCounts.remove_count,
-        total:     shiftCounts.total_count,
-      },
+      credentials: shape(credCounts),
+      shifts:      shape(shiftCounts),
+      holidays:    shape(holidayCounts),
       // has_pending = the user has unsubmitted work (needs to click "Update device")
-      has_pending:
-        credCounts.add_count + credCounts.remove_count +
-        shiftCounts.add_count + shiftCounts.remove_count > 0,
+      has_pending:  all.some((c) => c.add_count + c.remove_count > 0),
       // has_awaiting = a push has happened and we're waiting for device confirmation
-      has_awaiting:
-        credCounts.submitted_count + shiftCounts.submitted_count > 0,
+      has_awaiting: all.some((c) => c.submitted_count > 0),
     };
 
-    return res.json({ device: publicDevice(rows[0]), sync });
+    return res.json({ device: await withBoard(rows[0]), sync });
   } catch (err) {
     return next(err);
   }
@@ -303,19 +329,11 @@ async function update(req, res, next) {
         WHERE id = $${params.length - 1}
           AND company_id = $${params.length}
           AND deleted_at IS NULL
-        RETURNING id, device_id, device_type, firmware_version,
-                  device_name, location, notes,
-                  status, door_state, battery_percent, power_mode,
-                  carrier, signal_strength,
-                  door_override, deep_sleep_duration_s, osdp_stage,
-                  fw_credential_count, fw_shift_count,
-                  fw_holiday_count, fw_door_shift_count,
-                  config_card_type, latch_interval_s, state_synced_at,
-                  last_seen, created_at, updated_at`,
+        RETURNING ${DEVICE_COLUMNS}`,
       params
     );
     if (rows.length === 0) return notFound(res);
-    return res.json({ device: publicDevice(rows[0]) });
+    return res.json({ device: await withBoard(rows[0]) });
   } catch (err) {
     return next(err);
   }
@@ -537,12 +555,15 @@ async function claimDevice(req, res, next) {
       });
     }
 
-    // v2 resource: board/firmware live under `device`.
-    const board = simkuraDevice?.device?.board;
-    const deviceType      = typeof board === 'string' && board.trim()
-      ? board.trim().toLowerCase()
-      : 'sb6';
+    // v2 resource: board/firmware live under `device`. The hardware profile
+    // (manufacturer, revision, doors, capability tiers — migration 085) is
+    // written on claim too, so a freshly claimed device is gateable before
+    // the state-sync worker's next pass.
+    const profile         = profileFromResource(simkuraDevice);
+    const deviceType      = profile.device_type ?? 'sb6';
     const firmwareVersion = simkuraDevice?.device?.firmware || null;
+    const profileCols     = Object.keys(profile).filter((c) => c !== 'device_type');
+    const profileVals     = profileCols.map((c) => bindValue(c, profile[c]));
 
     // Check current claim state. UPDATE the existing row when it's in our
     // pool with company_id NULL; reject when it's already claimed; INSERT
@@ -563,6 +584,8 @@ async function claimDevice(req, res, next) {
 
     let row;
     if (existing[0]) {
+      const base = [existing[0].id, companyId, name, deviceType, firmwareVersion, userId];
+      const profileSets = profileCols.map((c, i) => `${c} = $${base.length + i + 1}`);
       const { rows } = await query(
         `UPDATE devices
             SET company_id  = $2,
@@ -572,19 +595,24 @@ async function claimDevice(req, res, next) {
                 assigned_by = $6,
                 assigned_at = NOW(),
                 updated_at  = NOW()
+                ${profileSets.map((s) => `, ${s}`).join('')}
           WHERE id = $1
         RETURNING *`,
-        [existing[0].id, companyId, name, deviceType, firmwareVersion, userId]
+        [...base, ...profileVals]
       );
       row = rows[0];
     } else {
+      const base = [companyId, hwId, deviceType, firmwareVersion, name, userId];
+      const profilePlaceholders = profileCols.map((_, i) => `$${base.length + i + 1}`);
       const { rows } = await query(
         `INSERT INTO devices
            (company_id, device_id, device_type, firmware_version, device_name,
-            status, door_state, power_mode, assigned_by, assigned_at)
-         VALUES ($1, $2, $3, $4, $5, 'offline', 'unknown', 'active', $6, NOW())
+            status, door_state, power_mode, assigned_by, assigned_at
+            ${profileCols.map((c) => `, ${c}`).join('')})
+         VALUES ($1, $2, $3, $4, $5, 'offline', 'unknown', 'active', $6, NOW()
+            ${profilePlaceholders.map((p) => `, ${p}`).join('')})
          RETURNING *`,
-        [companyId, hwId, deviceType, firmwareVersion, name, userId]
+        [...base, ...profileVals]
       );
       row = rows[0];
     }
@@ -595,7 +623,7 @@ async function claimDevice(req, res, next) {
       actor:    { user_id: userId },
       device:   { device_id: row.device_id },
     });
-    return res.status(201).json({ device: publicDevice(row) });
+    return res.status(201).json({ device: await withBoard(row) });
   } catch (err) {
     // Race condition: another claim landed between our SELECT and INSERT.
     if (err.code === '23505') {
@@ -656,7 +684,7 @@ async function releaseDevice(req, res, next) {
       actor:    { user_id: userId },
       device:   { device_id: row.device_id },
     });
-    return res.json({ device: publicDevice(row) });
+    return res.json({ device: await withBoard(row) });
   } catch (err) {
     return next(err);
   }

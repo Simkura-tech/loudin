@@ -7,8 +7,7 @@
  *
  * Layout:
  *   • Momentary unlock — lock.unlock, big primary button (the killer feature)
- *   • Unlock / Locked toggle — lock.set-state, reads device.door_state to
- *     decide which side of the toggle is "active"
+ *   • (door mode — lock / unlock / lockdown / normal — lives in DeviceDoorMode)
  *   • Reboot — device.reboot, confirm-gated
  *   • Provisioning — opens a modal that fires lock.configure
  *     (readerTechnology + latchInterval)
@@ -23,14 +22,16 @@
  * "device acted on it". The confirmation event lands in the Activity tab.
  */
 
-import { useState } from 'react';
+import { useMemo, useState } from 'react';
 import styled from '@emotion/styled';
 import { branding } from '../../branding';
+import { useDeviceCapabilities } from '../../hooks';
+import { useFeatures } from '../../contexts/FeaturesContext';
+import { unsupportedStyle } from './capabilityStyles';
 import {
   IconAlertTriangle,
   IconCheck,
   IconEraser,
-  IconLock,
   IconLockOpen,
   IconPower,
   IconRefresh,
@@ -78,7 +79,10 @@ const Row = styled.div`
   align-items: center;
 `;
 
-const PrimaryButton = styled.button`
+/* $unsupported on every action button: the board can't do this at all (as
+   opposed to `disabled`, which is "busy right now"). Muted and desaturated
+   via CapabilityGate.unsupportedStyle; the reason rides on `title`. */
+const PrimaryButton = styled.button<{ $unsupported?: boolean }>`
   display: inline-flex;
   align-items: center;
   gap: 6px;
@@ -97,9 +101,10 @@ const PrimaryButton = styled.button`
   &:hover { background: ${({ theme }) => theme.colors.brand.primaryHover ?? theme.colors.brand.primary}; }
   &:active { transform: translateY(1px); }
   &:disabled { opacity: 0.6; cursor: not-allowed; }
+  ${({ $unsupported }) => $unsupported && unsupportedStyle}
 `;
 
-const SecondaryButton = styled.button<{ $variant?: 'default' | 'danger' }>`
+const SecondaryButton = styled.button<{ $variant?: 'default' | 'danger'; $unsupported?: boolean }>`
   display: inline-flex;
   align-items: center;
   gap: 5px;
@@ -121,42 +126,7 @@ const SecondaryButton = styled.button<{ $variant?: 'default' | 'danger' }>`
       $variant === 'danger' ? '#fecaca' : theme.colors.border.medium ?? theme.colors.border.light};
   }
   &:disabled { opacity: 0.6; cursor: not-allowed; }
-`;
-
-/* Segmented two-state toggle for the persistent door state. */
-const Toggle = styled.div`
-  display: inline-flex;
-  border: 1px solid ${({ theme }) => theme.colors.border.light};
-  border-radius: 8px;
-  overflow: hidden;
-  height: 34px;
-`;
-
-const ToggleSide = styled.button<{ $active: boolean }>`
-  display: inline-flex;
-  align-items: center;
-  gap: 5px;
-  padding: 0 12px;
-  border: none;
-  background: ${({ theme, $active }) =>
-    $active ? theme.colors.brand.primary : theme.colors.background.primary};
-  color: ${({ theme, $active }) => ($active ? '#fff' : theme.colors.text.primary)};
-  font-size: 13px;
-  font-weight: ${({ $active }) => ($active ? 600 : 500)};
-  font-family: inherit;
-  cursor: pointer;
-
-  & + & {
-    border-left: 1px solid ${({ theme }) => theme.colors.border.light};
-  }
-
-  &:hover:not(:disabled) {
-    background: ${({ theme, $active }) =>
-      $active
-        ? (theme.colors.brand.primaryHover ?? theme.colors.brand.primary)
-        : theme.colors.background.secondary};
-  }
-  &:disabled { opacity: 0.6; cursor: not-allowed; }
+  ${({ $unsupported }) => $unsupported && unsupportedStyle}
 `;
 
 const Status = styled.div<{ $tone: 'idle' | 'success' | 'error' }>`
@@ -284,8 +254,10 @@ const Select = styled.select`
 // v2 lock.configure readerTechnology vocabulary — records which credential
 // reader the installer wired to this door (a platform fact, not a firmware
 // setting; card formats are firmware-implemented and not configurable).
+// The modal offers only the subset in the board's
+// supported["doors.reader.technology"] list.
 const READER_TECHNOLOGIES: { value: string; label: string }[] = [
-  { value: 'prox',      label: 'Prox — 125 kHz (default)' },
+  { value: 'prox',      label: 'Prox — 125 kHz' },
   { value: 'smartcard', label: 'Smart card — 13.56 MHz' },
   { value: 'nfc',       label: 'NFC' },
   { value: 'ble',       label: 'Bluetooth (BLE)' },
@@ -303,9 +275,22 @@ interface ConfirmState {
   run?: () => void;
 }
 
+/** Provisioning form values as strings, so "not recorded" / "not reported
+ *  yet" can be an empty field rather than a fabricated default. The modal
+ *  diffs against what the device currently reports and sends only the
+ *  fields that changed. */
 interface ProvisioningForm {
+  /** '' = not recorded. */
   readerTechnology: string;
-  latchInterval: number;
+  /** '' = not reported yet. */
+  latchInterval: string;
+}
+
+function provisioningFormFor(device: Device): ProvisioningForm {
+  return {
+    readerTechnology: device.reader.technology ?? '',
+    latchInterval:    device.latch_interval_s != null ? String(device.latch_interval_s) : '',
+  };
 }
 
 interface Props {
@@ -325,16 +310,46 @@ export function DeviceActions({ device, onCommandSent, onDeviceChanged }: Props)
   });
   const [confirm, setConfirm] = useState<ConfirmState | null>(null);
 
-  // Provisioning modal state
-  const [provOpen, setProvOpen]     = useState(false);
-  const [provForm, setProvForm]     = useState<ProvisioningForm>({
-    readerTechnology: 'prox',
-    latchInterval: 5,
-  });
-  const [provSaving, setProvSaving] = useState(false);
-  const [provError, setProvError]   = useState<string | null>(null);
+  // Provisioning modal state. `provInitial` is what the device reported when
+  // the modal opened — the baseline the form is diffed against on Apply.
+  const [provOpen, setProvOpen]       = useState(false);
+  const [provInitial, setProvInitial] = useState<ProvisioningForm>(() => provisioningFormFor(device));
+  const [provForm, setProvForm]       = useState<ProvisioningForm>(provInitial);
+  const [provSaving, setProvSaving]   = useState(false);
+  const [provError, setProvError]     = useState<string | null>(null);
 
-  const heldUnlocked = device.door_state === 'unlocked';
+
+  // Hardware gates. Lock commands need the lock-control block; pushing or
+  // clearing records needs somewhere on the device to put them (either the
+  // credential store or schedules is enough). Reboot is universal.
+  const caps     = useDeviceCapabilities(device);
+  const lockGate = caps.gate({ capability: 'lock-control' });
+
+  // Platform feature flags: a switched-off action is not rendered at all.
+  const features      = useFeatures();
+  const unlockOn      = features.enabled('momentary_unlock');
+  const provisionOn   = features.enabled('provisioning');
+  const maintenanceOn = features.enabled('maintenance');
+  const dataGate = caps.has('credential-store') || caps.has('schedules')
+    ? { enabled: true, reason: null }
+    : caps.gate({ capability: 'credential-store' });
+
+  // Reader technologies this board can pair with. If the device somehow
+  // carries a value outside that list, keep it selectable so the form shows
+  // the truth rather than silently switching it.
+  const technologyOptions = useMemo(() => {
+    const allowed = caps.values('doors.reader.technology');
+    const list = READER_TECHNOLOGIES.filter((t) => allowed.includes(t.value));
+    const current = device.reader.technology;
+    if (current && !list.some((t) => t.value === current)) {
+      list.push(READER_TECHNOLOGIES.find((t) => t.value === current) ?? { value: current, label: current });
+    }
+    return list;
+  }, [caps, device.reader.technology]);
+
+  const provDirty =
+    provForm.readerTechnology !== provInitial.readerTechnology ||
+    provForm.latchInterval !== provInitial.latchInterval;
 
   const fire = async (command: string, payload?: Record<string, unknown>) => {
     setPending(command);
@@ -406,26 +421,47 @@ export function DeviceActions({ device, onCommandSent, onDeviceChanged }: Props)
     );
 
   const openProvisioning = () => {
-    setProvForm({
-      readerTechnology: 'prox',
-      latchInterval: 5,
-    });
+    const initial = provisioningFormFor(device);
+    setProvInitial(initial);
+    setProvForm(initial);
     setProvError(null);
     setProvOpen(true);
   };
 
   const applyProvisioning = async (e: React.FormEvent) => {
     e.preventDefault();
-    setProvSaving(true);
     setProvError(null);
+
+    // Send only what changed. The contract's DoorConfigPatch treats omitted
+    // fields as unchanged, so an untouched latch never gets re-sent (and
+    // never gets reset to a default the device didn't have).
+    const patch: { readerTechnology?: string; latchInterval?: number } = {};
+    if (provForm.readerTechnology && provForm.readerTechnology !== provInitial.readerTechnology) {
+      patch.readerTechnology = provForm.readerTechnology;
+    }
+    if (provForm.latchInterval !== '' && provForm.latchInterval !== provInitial.latchInterval) {
+      const n = Number(provForm.latchInterval);
+      if (!Number.isInteger(n) || n < 1 || n > 255) {
+        setProvError('Latch interval must be a whole number of seconds from 1 to 255.');
+        return;
+      }
+      patch.latchInterval = n;
+    }
+    if (Object.keys(patch).length === 0) {
+      setProvOpen(false);
+      return;
+    }
+
+    setProvSaving(true);
     try {
-      await devicesApi.sendCommand(device.device_id, 'lock.configure', {
-        readerTechnology: provForm.readerTechnology,
-        latchInterval: provForm.latchInterval,
-      });
-      setStatus({ tone: 'success', text: 'Provisioning sent.' });
+      await devicesApi.sendCommand(device.device_id, 'lock.configure', patch);
+      const parts: string[] = [];
+      if (patch.readerTechnology) parts.push('reader technology recorded');
+      if (patch.latchInterval != null) parts.push(`${patch.latchInterval}s latch queued to the lock`);
+      setStatus({ tone: 'success', text: `Provisioning sent — ${parts.join(', ')}.` });
       setProvOpen(false);
       onCommandSent?.();
+      onDeviceChanged?.();
     } catch (err) {
       setProvError(err instanceof Error ? err.message : 'Provisioning failed');
     } finally {
@@ -439,42 +475,20 @@ export function DeviceActions({ device, onCommandSent, onDeviceChanged }: Props)
       <PanelBody>
         <Row>
           {/* Momentary unlock — primary action */}
+{unlockOn && (
           <PrimaryButton
             type="button"
-            disabled={!!pending}
+            disabled={!!pending || !lockGate.enabled}
+            $unsupported={!lockGate.enabled}
+            title={lockGate.reason ?? undefined}
             onClick={() => fire('lock.unlock')}
           >
             <IconLockOpen size={18} strokeWidth={2} />
             {pending === 'lock.unlock' ? 'Unlocking…' : 'Momentary unlock'}
           </PrimaryButton>
+          )}
 
-          {/* Persistent door-state toggle */}
-          <Toggle role="group" aria-label="Persistent door state">
-            <ToggleSide
-              type="button"
-              $active={heldUnlocked}
-              disabled={!!pending || heldUnlocked}
-              onClick={() => fire('lock.set-state', { state: 'unlocked' })}
-              title="Hold the door unlocked until manually changed"
-            >
-              <IconLockOpen size={14} strokeWidth={2} />
-              Unlock
-            </ToggleSide>
-            {/* 'normal' clears the hold-unlocked override and hands the
-                door back to its schedule — NOT 'locked', which would pin
-                the door locked and suppress shift-driven auto-unlock. */}
-            <ToggleSide
-              type="button"
-              $active={!heldUnlocked}
-              disabled={!!pending || !heldUnlocked}
-              onClick={() => fire('lock.set-state', { state: 'normal' })}
-              title="Return the door to normal operation — locked, following its schedule"
-            >
-              <IconLock size={14} strokeWidth={2} />
-              Locked
-            </ToggleSide>
-          </Toggle>
-
+{maintenanceOn && (
           <SecondaryButton
             type="button"
             disabled={!!pending}
@@ -488,20 +502,27 @@ export function DeviceActions({ device, onCommandSent, onDeviceChanged }: Props)
             <IconPower size={16} strokeWidth={2} />
             Reboot
           </SecondaryButton>
+          )}
 
+{provisionOn && (
           <SecondaryButton
             type="button"
-            disabled={!!pending}
+            disabled={!!pending || !lockGate.enabled}
+            $unsupported={!lockGate.enabled}
+            title={lockGate.reason ?? undefined}
             onClick={openProvisioning}
           >
             <IconSettings size={16} strokeWidth={2} />
             Provisioning
           </SecondaryButton>
+          )}
 
+{maintenanceOn && (<>
           <SecondaryButton
             type="button"
-            disabled={!!pending}
-            title={`Wipe the lock and re-push every credential and schedule from ${branding.productName}`}
+            disabled={!!pending || !dataGate.enabled}
+            $unsupported={!dataGate.enabled}
+            title={dataGate.reason ?? `Wipe the lock and re-push every credential and schedule from ${branding.productName}`}
             onClick={() => setConfirm({
               command: 'resync',
               title: `Re-sync ${device.device_name}?`,
@@ -519,8 +540,9 @@ export function DeviceActions({ device, onCommandSent, onDeviceChanged }: Props)
           <SecondaryButton
             type="button"
             $variant="danger"
-            disabled={!!pending}
-            title="Remove every credential and schedule from this lock"
+            disabled={!!pending || !dataGate.enabled}
+            $unsupported={!dataGate.enabled}
+            title={dataGate.reason ?? 'Remove every credential and schedule from this lock'}
             onClick={() => setConfirm({
               command: 'clear',
               title: `Clear ${device.device_name}?`,
@@ -534,6 +556,7 @@ export function DeviceActions({ device, onCommandSent, onDeviceChanged }: Props)
             <IconEraser size={16} strokeWidth={2} />
             {pending === 'clear' ? 'Clearing…' : 'Clear device'}
           </SecondaryButton>
+          </>)}
         </Row>
 
         <Status $tone={status.tone}>
@@ -587,11 +610,16 @@ export function DeviceActions({ device, onCommandSent, onDeviceChanged }: Props)
                     value={provForm.readerTechnology}
                     onChange={(e) => setProvForm({ ...provForm, readerTechnology: e.target.value })}
                   >
-                    {READER_TECHNOLOGIES.map((t) => (
+                    <option value="">— not recorded —</option>
+                    {technologyOptions.map((t) => (
                       <option key={t.value} value={t.value}>{t.label}</option>
                     ))}
                   </Select>
-                  <FieldHint>Records which credential reader is wired to this door — shown on the device, applied immediately.</FieldHint>
+                  <FieldHint>
+                    Which credential reader the installer wired to this door. {caps.boardName} can pair with{' '}
+                    {technologyOptions.map((t) => t.label.split(' — ')[0]).join(', ') || 'no listed technologies'}.
+                    Recorded by the platform and shown on the device immediately.
+                  </FieldHint>
                 </Field>
 
                 <Field>
@@ -600,11 +628,16 @@ export function DeviceActions({ device, onCommandSent, onDeviceChanged }: Props)
                     type="number"
                     min={1}
                     max={255}
+                    step={1}
                     value={provForm.latchInterval}
-                    onChange={(e) => setProvForm({ ...provForm, latchInterval: Number(e.target.value) })}
-                    required
+                    placeholder={provInitial.latchInterval === '' ? 'Not reported yet' : undefined}
+                    onChange={(e) => setProvForm({ ...provForm, latchInterval: e.target.value })}
                   />
-                  <FieldHint>How long the door stays unlatched after a momentary unlock (1–255).</FieldHint>
+                  <FieldHint>
+                    How long the door stays unlatched after a momentary unlock (1–255).
+                    Queued to the lock; takes effect on its next wake.
+                    {provInitial.latchInterval !== '' && ` Currently ${provInitial.latchInterval}s.`}
+                  </FieldHint>
                 </Field>
 
                 {provError && (
@@ -623,7 +656,11 @@ export function DeviceActions({ device, onCommandSent, onDeviceChanged }: Props)
                 <SecondaryButton type="button" onClick={() => setProvOpen(false)} disabled={provSaving}>
                   Cancel
                 </SecondaryButton>
-                <PrimaryButton type="submit" disabled={provSaving}>
+                <PrimaryButton
+                  type="submit"
+                  disabled={provSaving || !provDirty}
+                  title={provDirty ? undefined : 'Nothing has changed'}
+                >
                   {provSaving ? 'Applying…' : <><IconCheck size={16} /> Apply</>}
                 </PrimaryButton>
               </DialogFooter>
@@ -643,6 +680,8 @@ function commandLabel(command: string, payload?: Record<string, unknown>): strin
     const s = payload?.state as string | undefined;
     if (s === 'locked')   return 'Lock';
     if (s === 'unlocked') return 'Hold unlocked';
+    if (s === 'lockdown') return 'Lockdown';
+    if (s === 'normal')   return 'Return to normal';
     return 'State change';
   }
   return command;

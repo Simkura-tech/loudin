@@ -209,6 +209,51 @@ describe('Simkura webhooks — receiver', () => {
     assert.equal(row.battery_percent, 96);
   });
 
+  test('lock.state_changed: override codes set door_override_mode; normal clears it without touching door_state', async () => {
+    const modeRow = async () => (await query(
+      `SELECT door_state, door_override, door_override_mode FROM devices WHERE device_id = $1`, [hwId])).rows[0];
+
+    // Code 7: admin held it unlocked (override true).
+    await applyEventToDeviceState({ event_type: 'lock.state_changed', device_id: hwId,
+      data: { lockState: 'unlocked', override: true, trigger: 'command', code: 7 } });
+    let row = await modeRow();
+    assert.equal(row.door_state, 'unlocked');
+    assert.equal(row.door_override, true);
+    assert.equal(row.door_override_mode, 'command');
+
+    // Code 9: override cleared — mode back to none, state left for the next shift event.
+    await applyEventToDeviceState({ event_type: 'lock.state_changed', device_id: hwId,
+      data: { lockState: 'normal', override: false, trigger: 'command', code: 9 } });
+    row = await modeRow();
+    assert.equal(row.door_state, 'unlocked', 'normal must not rewrite door_state');
+    assert.equal(row.door_override, false);
+    assert.equal(row.door_override_mode, 'none');
+
+    // Code 5: schedule locked it (override false).
+    await applyEventToDeviceState({ event_type: 'lock.state_changed', device_id: hwId,
+      data: { lockState: 'locked', override: false, trigger: 'shift', code: 5 } });
+    row = await modeRow();
+    assert.equal(row.door_state, 'locked');
+    assert.equal(row.door_override_mode, 'none');
+
+    // Lockdown without an override field is still an override.
+    await applyEventToDeviceState({ event_type: 'lock.state_changed', device_id: hwId,
+      data: { lockState: 'lockdown' } });
+    row = await modeRow();
+    assert.equal(row.door_state, 'lockdown');
+    assert.equal(row.door_override_mode, 'command');
+
+    // Legacy numeric state with no override info leaves the mode alone.
+    await applyEventToDeviceState({ event_type: 'lock.state_changed', device_id: hwId, data: { state: 0 } });
+    row = await modeRow();
+    assert.equal(row.door_state, 'locked');
+    assert.equal(row.door_override_mode, 'command');
+
+    // Reset for later tests.
+    await applyEventToDeviceState({ event_type: 'lock.state_changed', device_id: hwId,
+      data: { lockState: 'normal', code: 9 } });
+  });
+
   test('isTest events are stored but never mutate device state', async () => {
     await applyEventToDeviceState({ event_type: 'device.online', device_id: hwId, data: {} });
     await applyEventToDeviceState({ event_type: 'health.battery_recovered', device_id: hwId, data: { batteryPct: 96 } });

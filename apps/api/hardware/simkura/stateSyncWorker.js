@@ -10,24 +10,39 @@
  *   last_seen           ← meta.lastSeen (never moved backwards — a webhook
  *                          event may have bumped it more recently)
  *   door_state          ← doors[0].lock.state
- *   door_override       ← doors[0].lock.override (0 schedule / 1 command /
- *                          2 holiday — stored as boolean: any override = true)
+ *   door_position       ← doors[0].lock.position (open / closed; null unless
+ *                          the board has door-position-sensing)
+ *   door_override       ← doors[0].lock.override != 0 (boolean, kept for
+ *                          older readers)
+ *   door_override_mode  ← doors[0].lock.override (0 none / 1 command /
+ *                          2 holiday — migration 089)
+ *   reader_protocol     ← doors[0].reader.protocol (osdp / wiegand)
+ *   reader_connection   ← doors[0].reader.connection (secure / insecure)
+ *   reader_technology   ← doors[0].reader.technology (installer-recorded)
  *   latch_interval_s    ← doors[0].latchInterval
  *   fw_*_count          ← doors[0].counts (credentials / shifts / holidays)
  *   power_mode          ← power.state
  *   battery_percent     ← power.batteryPct (null for plug-in devices)
  *   battery_health      ← power.batteryHealth ('dead' = safe mode, motor
  *                          cannot actuate — surfaced so admins act on it)
+ *   battery_chemistry   ← power.batteryChemistry (alkaline / lithium / li-ion)
  *   firmware_version    ← device.firmware (keeps OTA updates visible)
  *   carrier             ← connectivity.carrier (cellular only)
  *   signal_strength     ← connectivity.signal (RSRP dBm, cellular only)
+ *
+ * Hardware profile (migration 085, mapped by hardwareProfile.js) — the
+ * provisioning-time facts and capability tiers the UI gates features on:
+ *   device_type, manufacturer, hardware_version, num_doors, deployed,
+ *   capabilities, features, supported, card_formats, power_type,
+ *   connectivity_transport. Mirrored even for never-seen devices: a board's
+ *   capabilities don't depend on it having checked in.
  *
  * Multi-door note: v2 models doors[] as first-class, but our schema is
  * single-door — we mirror door 1 only. Multi-door boards (SB8-4D) need a
  * doors table before their extra doors are visible here.
  *
- * v1-era columns no longer refreshed (see migration 083): osdp_stage,
- * config_card_type, deep_sleep_duration_s, fw_door_shift_count.
+ * The v1-era columns (osdp_stage, config_card_type, deep_sleep_duration_s,
+ * fw_door_shift_count) were dropped in migration 087.
  *
  * This complements the webhook feed (routes/webhooks.js), which is
  * event-driven and only carries door/power/liveness. The poll is what keeps
@@ -50,6 +65,7 @@
  */
 
 const { client: simkuraClient } = require('./');
+const { profileFromResource, bindValue } = require('./hardwareProfile');
 const { query } = require('../../database/db');
 const events = require('../../integrations/events');
 const commandAck = require('../../services/access/commandAck');
@@ -68,8 +84,13 @@ let lastLoggedError = null;
 
 const STATUSES        = new Set(['online', 'offline']);
 const DOOR_STATES     = new Set(['locked', 'unlocked', 'lockdown']);
+const DOOR_POSITIONS  = new Set(['open', 'closed']);
+const READER_PROTOCOLS    = new Set(['osdp', 'wiegand']);
+const READER_CONNECTIONS  = new Set(['secure', 'insecure']);
+const READER_TECHNOLOGIES = new Set(['prox', 'smartcard', 'nfc', 'ble', 'multi']);
 const POWER_MODES     = new Set(['active', 'sleep', 'deep_sleep']);
 const BATTERY_HEALTHS = new Set(['ok', 'low', 'dead']);
+const BATTERY_CHEMISTRIES = new Set(['alkaline', 'lithium', 'li-ion']);
 
 /**
  * Map a v2 device resource onto the `devices` columns we mirror. Fields the
@@ -79,13 +100,15 @@ const BATTERY_HEALTHS = new Set(['ok', 'low', 'dead']);
  * handles their absence.
  */
 function fieldsFromState(resource) {
-  const out = {};
+  // Hardware profile first: board facts and capability tiers are valid
+  // whether or not the device has ever checked in.
+  const out = profileFromResource(resource);
 
   if (STATUSES.has(resource?.meta?.status)) out.status = resource.meta.status;
 
   // A device that has never checked in (lastSeen null) has nothing measured
   // yet — mirroring its defaults would show a factory-new lock as "0%
-  // battery". Status (above) is still meaningful; skip the rest.
+  // battery". Status and profile (above) are still meaningful; skip the rest.
   const lastSeen = resource?.meta?.lastSeen ? new Date(resource.meta.lastSeen) : null;
   if (!lastSeen || Number.isNaN(lastSeen.getTime())) return out;
 
@@ -95,11 +118,32 @@ function fieldsFromState(resource) {
   const doorState = door?.lock?.state;
   if (DOOR_STATES.has(doorState)) out.door_state = doorState;
 
-  // Override: 0 = schedule-controlled, 1 = cloud override, 2 = holiday.
-  // Column is boolean — any active override stores as true.
+  // Position is null unless the board senses it; an explicit null clears a
+  // value a previous firmware might have reported.
+  const position = door?.lock?.position;
+  if (DOOR_POSITIONS.has(position)) out.door_position = position;
+  else if (position === null)       out.door_position = null;
+
+  // Reader facts: protocol/connection are reported, technology is the value
+  // an installer recorded via lock.configure. Nulls are meaningful (wiegand
+  // has no secure channel; technology may simply never have been set).
+  if (door && typeof door === 'object' && 'reader' in door) {
+    const reader = door.reader ?? {};
+    out.reader_protocol   = READER_PROTOCOLS.has(reader.protocol)     ? reader.protocol   : null;
+    out.reader_connection = READER_CONNECTIONS.has(reader.connection) ? reader.connection : null;
+    out.reader_technology = READER_TECHNOLOGIES.has(reader.technology) ? reader.technology : null;
+  }
+
+  // Override: 0 = schedule-controlled, 1 = command override, 2 = holiday.
+  // door_override_mode keeps the distinction (migration 089); the boolean
+  // stays in step for older readers.
   const override = door?.lock?.override;
-  if (override === 0 || override === 1 || override === 2 || typeof override === 'boolean') {
-    out.door_override = !!override;
+  if (override === 0 || override === 1 || override === 2) {
+    out.door_override      = override !== 0;
+    out.door_override_mode = override === 0 ? 'none' : override === 1 ? 'command' : 'holiday';
+  } else if (typeof override === 'boolean') {
+    out.door_override      = override;
+    out.door_override_mode = override ? 'command' : 'none';
   }
 
   const latch = Number(door?.latchInterval);
@@ -129,6 +173,10 @@ function fieldsFromState(resource) {
 
   if (BATTERY_HEALTHS.has(resource?.power?.batteryHealth)) {
     out.battery_health = resource.power.batteryHealth;
+  }
+
+  if (BATTERY_CHEMISTRIES.has(resource?.power?.batteryChemistry)) {
+    out.battery_chemistry = resource.power.batteryChemistry;
   }
 
   if (typeof resource?.device?.firmware === 'string' && resource.device.firmware.trim()) {
@@ -180,7 +228,7 @@ async function refreshDevice(hwId) {
       params.push(value);
       sets.push(`last_seen = GREATEST(COALESCE(last_seen, 'epoch'::timestamptz), $${params.length})`);
     } else {
-      params.push(value);
+      params.push(bindValue(col, value));
       sets.push(`${col} = $${params.length}`);
     }
   }

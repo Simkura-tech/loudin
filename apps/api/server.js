@@ -129,6 +129,7 @@ app.use('/api/people',        require('./routes/client/people'));
 app.use('/api/people-groups', require('./routes/client/peopleGroups'));
 app.use('/api/credentials',   require('./routes/client/credentials'));
 app.use('/api/devices',       require('./routes/client/devices'));
+app.use('/api/features',      require('./routes/client/features'));
 app.use('/api/reseller',      require('./routes/client/reseller'));
 
 // ── Internal routes (/internal/*) — platform-admin only, firewallable ────

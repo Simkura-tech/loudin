@@ -30,18 +30,24 @@
  *      schedule.set     — skipped if no shifts remain (empty binding is
  *                         undefined firmware behaviour; no shifts = door
  *                         runs credentials-only, the correct default)
+ *   4. (only if any holiday changed — same wholesale rule: firmware has
+ *       holidays.add and holidays.clear only)
+ *      holidays.clear
+ *      holidays.add × N — every active holiday
  *
  * REBUILD (force:true) — wipe everything and re-push the full active state:
  *   schedule.clear → credentials.clear → shifts.clear → holidays.clear →
- *   credentials.add × N → shifts.add × N → schedule.set
- *   (holidays.clear wipes drifted/legacy holiday records; holiday *push*
- *   lands with the device-holiday attach feature — the junction has no
- *   delta lifecycle columns yet)
+ *   credentials.add × N → shifts.add × N → schedule.set → holidays.add × N
  *
- * Firmware shift slots: v2 validates shiftId as 1–255, but our shifts.id is
- * an unbounded serial. Shift pushes are always wholesale (clear + re-add),
- * so we assign slot numbers 1..N in push order and bind the schedule to the
- * same slots — DB ids never reach the firmware.
+ * Firmware shift / holiday slots: v2 validates shiftId and holidayId as
+ * 1–255, but our ids are unbounded serials. Both pushes are always
+ * wholesale (clear + re-add), so we assign slot numbers 1..N in push order
+ * (and bind the schedule to the same shift slots) — DB ids never reach the
+ * firmware.
+ *
+ * Holiday behavior: holidays.access_mode maps to the v2 `behavior` enum
+ * (open → unlocked, locked → locked, lockdown → lockdown). 'restricted'
+ * has no firmware equivalent and is skipped as unmappable.
  *
  * Stamping model (see migrations 058 + 084):
  *   * applied_at          set when the junction row was created/updated
@@ -153,6 +159,25 @@ function shiftAddBody(shift, slot) {
   };
 }
 
+// holidays.access_mode → v2 holidays.add `behavior`. Null = unmappable.
+const HOLIDAY_BEHAVIOR = { open: 'unlocked', locked: 'locked', lockdown: 'lockdown' };
+
+function toIso(v) {
+  if (v instanceof Date) return v.toISOString();
+  const t = Date.parse(v);
+  return Number.isFinite(t) ? new Date(t).toISOString() : null;
+}
+
+// Build the holidays.add body. `slot` is the 1-based firmware slot (1–255).
+// Returns null for rows that can't be mapped — caller skips them.
+function holidayAddBody(holiday, slot) {
+  const behavior = HOLIDAY_BEHAVIOR[holiday.access_mode] ?? null;
+  const start = toIso(holiday.start_datetime);
+  const end   = toIso(holiday.end_datetime);
+  if (!behavior || !start || !end) return null;
+  return { holidayId: slot, start, end, behavior };
+}
+
 // Operations that make up a rebuild. Any of these queued/sending on the
 // device means a previous push hasn't reached it yet — data records stack,
 // so pushing again would double-queue the rebuild.
@@ -226,6 +251,58 @@ const ACTIVE_SHIFTS_SQL = `
      AND ds.deleted_at IS NULL
      AND s.deleted_at IS NULL
    ORDER BY s.id`;
+
+const ACTIVE_HOLIDAYS_SQL = `
+  SELECT dh.id AS junction_id,
+         h.id, h.holiday_name, h.start_datetime, h.end_datetime, h.access_mode
+    FROM device_holidays dh
+    JOIN holidays h ON h.id = dh.holiday_id
+   WHERE dh.device_id = $1
+     AND dh.deleted_at IS NULL
+     AND h.deleted_at IS NULL
+     AND h.status = 'active'
+   ORDER BY h.start_datetime, h.id`;
+
+// Pending adds / removes on a junction — the sync-summary predicate.
+const PENDING_COUNTS_SQL = (table) => `
+  SELECT
+    COUNT(*) FILTER (WHERE deleted_at IS NULL
+                       AND submitted_at IS NULL
+                       AND (synced_at IS NULL OR synced_at < applied_at))::int AS adds,
+    COUNT(*) FILTER (WHERE deleted_at IS NOT NULL)::int AS removes
+    FROM ${table}
+   WHERE device_id = $1`;
+
+/**
+ * Wholesale holiday push: clear the lock's holiday table, settle pending
+ * removals, then re-add every active holiday on fresh slots. Shared by
+ * delta (when any holiday changed) and rebuild. Returns the failure detail
+ * or null.
+ */
+async function pushHolidays({ deviceId, hwId, holidays, sequence, fire, simkura }) {
+  const r = await fire('holidays.clear', () => simkura.clearHolidays(hwId, DOOR));
+  if (!r.ok) return r.detail;
+
+  await query(
+    `DELETE FROM device_holidays WHERE device_id = $1 AND deleted_at IS NOT NULL`,
+    [deviceId]
+  );
+
+  const submitted = [];
+  let failure = null;
+  for (const [idx, h] of holidays.entries()) {
+    const body = holidayAddBody(h, idx + 1);
+    if (!body) {
+      sequence.push({ command: 'holidays.add', status: 'skipped', detail: `holiday ${h.id}: unmappable (${h.access_mode})` });
+      continue;
+    }
+    const rr = await fire('holidays.add', () => simkura.addHoliday(hwId, DOOR, body));
+    if (!rr.ok) { failure = rr.detail; break; }
+    submitted.push({ junctionId: h.junction_id, commandId: commandIdOf(rr) });
+  }
+  await stampSubmitted('device_holidays', submitted);
+  return failure;
+}
 
 /**
  * Stamp accepted adds: submitted_at now, plus the command id that the
@@ -309,7 +386,11 @@ async function delta({ deviceId, hwId, sequence, fire, simkura }) {
   // "Pending add" mirrors the sync-summary predicate in
   // controllers/access/devices.js get() — keep the two in lockstep so a
   // push always drives the banner counts to zero.
-  const [{ rows: credAdds }, { rows: credRemovals }, { rows: activeShifts }, { rows: [shiftPending] }] =
+  const [
+    { rows: credAdds }, { rows: credRemovals },
+    { rows: activeShifts }, { rows: [shiftPending] },
+    { rows: activeHolidays }, { rows: [holidayPending] },
+  ] =
     await Promise.all([
       query(
         `SELECT dc.id AS junction_id,
@@ -339,20 +420,14 @@ async function delta({ deviceId, hwId, sequence, fire, simkura }) {
         [deviceId]
       ),
       query(ACTIVE_SHIFTS_SQL, [deviceId]),
-      query(
-        `SELECT
-           COUNT(*) FILTER (WHERE deleted_at IS NULL
-                              AND submitted_at IS NULL
-                              AND (synced_at IS NULL OR synced_at < applied_at))::int AS adds,
-           COUNT(*) FILTER (WHERE deleted_at IS NOT NULL)::int AS removes
-           FROM device_shifts
-          WHERE device_id = $1`,
-        [deviceId]
-      ),
+      query(PENDING_COUNTS_SQL('device_shifts'), [deviceId]),
+      query(ACTIVE_HOLIDAYS_SQL, [deviceId]),
+      query(PENDING_COUNTS_SQL('device_holidays'), [deviceId]),
     ]);
 
-  const shiftsDirty = shiftPending.adds > 0 || shiftPending.removes > 0;
-  if (credAdds.length === 0 && credRemovals.length === 0 && !shiftsDirty) {
+  const shiftsDirty   = shiftPending.adds > 0 || shiftPending.removes > 0;
+  const holidaysDirty = holidayPending.adds > 0 || holidayPending.removes > 0;
+  if (credAdds.length === 0 && credRemovals.length === 0 && !shiftsDirty && !holidaysDirty) {
     return { ok: true, hwId, mode: 'delta', sequence, noop: true };
   }
 
@@ -445,13 +520,19 @@ async function delta({ deviceId, hwId, sequence, fire, simkura }) {
     }
   }
 
+  // 4. Holidays: same wholesale rule as shifts.
+  if (holidaysDirty) {
+    const failure = await pushHolidays({ deviceId, hwId, holidays: activeHolidays, sequence, fire, simkura });
+    if (failure) return { ok: false, hwId, mode: 'delta', sequence, error: failure };
+  }
+
   return { ok: true, hwId, mode: 'delta', sequence };
 }
 
 // ── Rebuild mode (force) ──────────────────────────────────────────────────────
 
 async function rebuild({ deviceId, hwId, sequence, fire, simkura }) {
-  const [{ rows: creds }, { rows: shifts }] = await Promise.all([
+  const [{ rows: creds }, { rows: shifts }, { rows: holidays }] = await Promise.all([
     query(
       `SELECT dc.id AS junction_id,
               c.id, c.credential_type, c.credential_value,
@@ -465,6 +546,7 @@ async function rebuild({ deviceId, hwId, sequence, fire, simkura }) {
       [deviceId]
     ),
     query(ACTIVE_SHIFTS_SQL, [deviceId]),
+    query(ACTIVE_HOLIDAYS_SQL, [deviceId]),
   ]);
 
   // 1. Unbind the door schedule first — firmware refuses to wipe shift
@@ -473,17 +555,13 @@ async function rebuild({ deviceId, hwId, sequence, fire, simkura }) {
   const r1 = await fire('schedule.clear', () => simkura.clearDoorSchedule(hwId, DOOR));
   if (!r1.ok) return { ok: false, hwId, mode: 'rebuild', sequence, error: r1.detail };
 
-  // 2. Clear credentials before shifts (spec order), then shifts, then any
-  // drifted/legacy holiday records (holiday push proper lands with the
-  // device-holiday attach feature).
+  // 2. Clear credentials before shifts (spec order), then shifts. Holidays
+  // are cleared + re-added as one unit in step 6.
   const r2 = await fire('credentials.clear', () => simkura.clearCredentials(hwId, DOOR));
   if (!r2.ok) return { ok: false, hwId, mode: 'rebuild', sequence, error: r2.detail };
 
   const r3 = await fire('shifts.clear', () => simkura.clearShifts(hwId, DOOR));
   if (!r3.ok) return { ok: false, hwId, mode: 'rebuild', sequence, error: r3.detail };
-
-  const r4 = await fire('holidays.clear', () => simkura.clearHolidays(hwId, DOOR));
-  if (!r4.ok) return { ok: false, hwId, mode: 'rebuild', sequence, error: r4.detail };
 
   // The wipe removed everything the lock held, including anything pending
   // removal — settle that bookkeeping before the re-adds (which may fail).
@@ -534,6 +612,10 @@ async function rebuild({ deviceId, hwId, sequence, fire, simkura }) {
     if (!r5.ok) return { ok: false, hwId, mode: 'rebuild', sequence, error: r5.detail };
   }
 
+  // 6. Holidays: clear + re-add every active holiday on fresh slots.
+  const holidayFailure = await pushHolidays({ deviceId, hwId, holidays, sequence, fire, simkura });
+  if (holidayFailure) return { ok: false, hwId, mode: 'rebuild', sequence, error: holidayFailure };
+
   return { ok: true, hwId, mode: 'rebuild', sequence };
 }
 
@@ -580,10 +662,17 @@ async function clearAll({ deviceId, simkura }) {
 
   const r4 = await fire('holidays.clear', () => simkura.clearHolidays(hwId, DOOR));
   if (!r4.ok) return { ok: false, hwId, sequence, error: r4.detail };
+  await query(
+    `UPDATE holidays
+        SET deleted_at = CURRENT_TIMESTAMP, updated_at = CURRENT_TIMESTAMP
+      WHERE deleted_at IS NULL
+        AND id IN (SELECT holiday_id FROM device_holidays WHERE device_id = $1)`,
+    [deviceId]
+  );
   await query(`DELETE FROM device_holidays WHERE device_id = $1`, [deviceId]);
 
   return { ok: true, hwId, sequence };
 }
 
 module.exports = { pushAll, clearAll };
-module.exports._internal = { credentialAddBody, credentialRemoveArgs, shiftAddBody, mapCredentialType, hhmmss }; // for tests
+module.exports._internal = { credentialAddBody, credentialRemoveArgs, shiftAddBody, holidayAddBody, mapCredentialType, hhmmss }; // for tests

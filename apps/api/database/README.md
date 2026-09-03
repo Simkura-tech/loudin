@@ -52,7 +52,8 @@ instead.
 - `users` — software users with logins. Two roles: `Admin` (1) and `User` (2). What kind of admin (platform / reseller / end-user) is determined by their company's `company_type`.
 - `user_types` — lookup table for the two roles.
 - `people` — door-access credential holders. No software login.
-- `devices` — door lock hardware. Nullable `company_id` (unclaimed pool). Carries the Simkura hardware `device_id`, live state, and firmware-reported counts.
+- `devices` — door lock hardware. Nullable `company_id` (unclaimed pool). Carries the Simkura hardware `device_id`, live state, firmware-reported counts, and the hardware profile (`manufacturer`, `hardware_version`, `num_doors`, `power_type`, `connectivity_transport`, `deployed`, plus the JSONB capability tiers `capabilities` / `features` / `supported` / `card_formats` that the UI gates features on — migration 085).
+- `device_boards` — local mirror of Simkura's public hardware catalog (`GET /v2/boards`), keyed by (`manufacturer`, `board`) with each board's default `capabilities` / `features` / `supported` tiers. Refreshed by the discovery worker; seeded with the SB6 fallback in migration 086.
 - `credentials` — PIN/HID/MIFARE access tokens, owned by people. Unique per company.
 
 **Access logic**

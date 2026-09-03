@@ -55,8 +55,9 @@ Reads and commands use v2; webhook management stays on v1:
 
 | Method & path | Used for |
 |---|---|
-| `GET /api/v2/devices?limit&page` | Fleet list (paginated ×100 internally) — each item is the device "spine" (`meta`, `device`, `capabilities`); also the reachability probe |
-| `GET /api/v2/devices/:id` | Full device resource **with state embedded** (v2 has no separate `/state` endpoint): per-door lock state and counts, power/battery, connectivity, firmware |
+| `GET /api/v2/boards` | Public hardware catalog — every board generation with its `capabilities` / `features` / `supported` tiers. Mirrored into `device_boards` by the discovery worker (see below) |
+| `GET /api/v2/devices?limit&page` | Fleet list (paginated ×100 internally) — each item is the device "spine" (`meta`, `device`, `capabilities`, `features`, `supported`); also the reachability probe |
+| `GET /api/v2/devices/:id` | Full device resource **with state embedded** (v2 has no separate `/state` endpoint): the spine plus effective `cardFormats`, per-door lock state and counts, power/battery, connectivity, firmware |
 | `POST/PUT/PATCH/DELETE /api/v2/devices/:id/doors/1/…` and `/api/v2/devices/:id/{config,reboot}` | The v2 resource-style commands (unlock, lock-state, door/device config, credentials, shifts, holidays, schedule) — all **asynchronous**: 202 returns a queued-command record (`cmd_…`), delivery happens on the device's next wake |
 | `GET /api/v2/devices/:id/commands` | Command records — without a status filter this is the active queue (queued + sending) |
 | `GET/POST/PUT/DELETE /api/v1/webhooks…` | Webhook registration management, plus `/test`, `/regenerate-secret`, `/deliveries` (`/v2/webhooks` is not drafted yet) |
@@ -128,14 +129,36 @@ Both run inline in the API process (started from `server.js`):
 
 - **Device discovery** — every 24h (`SIMKURA_DISCOVERY_INTERVAL_MS`), lists
   the fleet and inserts unknown devices as **unclaimed** rows
-  (`company_id IS NULL`); existing rows are never touched. Trigger manually
-  with `POST /api/platform/devices/sync`. Disable:
+  (`company_id IS NULL`) carrying the spine's hardware profile (see below);
+  existing rows are never touched. Each tick first refreshes the **board
+  catalog** (`GET /v2/boards` → `device_boards`, migration 086,
+  `hardware/simkura/boardCatalog.js`): rows are upserted by
+  (manufacturer, board) and never deleted, and a catalog failure is logged
+  without blocking device discovery. Every device the API returns embeds
+  its resolved catalog entry as `board` (display name plus the board's
+  tiers). **The board catalog is the authority** for feature gating and for
+  the `readerTechnology` guard on `lock.configure`; a device's own reported
+  tiers are only consulted for a board the catalog doesn't list, and the
+  SB6 contract fallback covers the rest. Migration 086 seeds the SB6 so the
+  catalog is never empty where Simkura is unconfigured. Trigger manually with
+  `POST /api/platform/devices/sync`. Disable:
   `SIMKURA_DISCOVERY_ENABLED=false`.
 - **State sync** — every 10min (`SIMKURA_STATE_SYNC_INTERVAL_MS`), polls
-  each device's v2 resource and mirrors it onto the row (status, lock state
-  and override, battery percentage and **health** — `dead` means the motor
-  can't actuate — firmware, signal, latch interval, firmware-reported record
-  counts). Multi-door devices are mirrored as door 1 only for now. This
+  each device's v2 resource and mirrors it onto the row (status, lock state,
+  door position and override, reader protocol / secure-channel status /
+  installer-recorded technology, battery percentage, **health** — `dead`
+  means the motor can't actuate — and chemistry, firmware, signal, latch
+  interval, firmware-reported record counts; the v1-era `osdp_stage`,
+  `config_card_type`, `deep_sleep_duration_s` and `fw_door_shift_count`
+  columns were dropped in migration 087), together with the **hardware
+  profile**: `manufacturer`,
+  `hardware_version`, `num_doors`, `power_type`, `connectivity_transport`,
+  `deployed`, and the three capability tiers `capabilities` / `features` /
+  `supported` plus the device's effective `card_formats` (migration 085,
+  mapped by `hardware/simkura/hardwareProfile.js`). The profile is what the
+  UI gates features on per board; it is mirrored even for devices that have
+  never checked in. Claiming a device writes it too, so a fresh claim is
+  gateable before the next poll. Multi-door devices are mirrored as door 1 only for now. This
   poll is the **only** path that can mark a device offline — webhooks only
   arrive from live devices. `last_seen` never moves backwards (webhooks and
   polls both bump it). Each refresh also reconciles pushed-but-unconfirmed
@@ -179,13 +202,16 @@ the UI, `POST /api/devices/:id/push`).
   for each detached credential (PINs via `?type=pin`), `credentials.add`
   for each new one, and — because firmware has no per-shift delete — a
   wholesale schedule rebuild (`schedule.clear` → `shifts.clear` →
-  `shifts.add` ×N → `schedule.set`) only when a shift changed. Shifts are
-  pushed on firmware slot ids (1..N, assigned per push) — database ids
-  never reach the device.
-- **Force rebuild** (`{force: true}`) — wipes everything (including any
-  drifted holiday records) and re-sends the full active state.
-- **Clear** (`POST /api/devices/:id/clear`) — removes all credentials and
-  schedules from the device; the claim survives.
+  `shifts.add` ×N → `schedule.set`) only when a shift changed, and the
+  same wholesale rule for holidays (`holidays.clear` → `holidays.add` ×N)
+  only when a holiday changed. Shifts and holidays are pushed on firmware
+  slot ids (1..N, assigned per push) — database ids never reach the
+  device. A holiday's `access_mode` maps to the v2 `behavior`
+  (open → unlocked, locked → locked, lockdown → lockdown).
+- **Force rebuild** (`{force: true}`) — wipes everything and re-sends the
+  full active state: credentials, shifts + schedule, holidays.
+- **Clear** (`POST /api/devices/:id/clear`) — removes all credentials,
+  schedules, and holidays from the device; the claim survives.
 
 Before a push, Loudin checks the device's Simkura queue and refuses to
 double-queue if a rebuild is already pending on a sleeping device (Simkura
@@ -218,10 +244,9 @@ is gone — record counts arrive with every state sync.)
 
 ## Current limitations
 
-- **Holidays** are modeled in the database and counted by firmware; rebuild
-  and clear operations wipe them on the device (`holidays.clear`), but
-  pushing holidays (`holidays.add`) lands together with the device-holiday
-  assignment feature.
+- **Holiday custom hours**: the schema's `restricted` access mode (custom
+  hours) has no v2 equivalent — the device UI offers open / locked /
+  lockdown only, and the push skips a `restricted` row as unmappable.
 - **Multi-door devices**: v2 models `doors[]` as first-class; Loudin
   currently mirrors door 1 only.
 - **Per-reseller Simkura accounts**: the schema (`companies.simkura_api_key`

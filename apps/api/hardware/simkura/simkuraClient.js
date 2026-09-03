@@ -28,27 +28,31 @@
 
 const axios = require('axios');
 const defaultConfig = require('./config/simkuraConfig');
+const { profileFromResource } = require('./hardwareProfile');
 
 const API_V1 = '/api/v1';
 const API_V2 = '/api/v2';
 
 /**
- * Flatten a v2 list item (the "spine": meta + device + capabilities) into
- * the shape our callers consume. `raw` keeps the original for anything else.
+ * Flatten a v2 list item (the "spine": meta + device + capabilities +
+ * features + supported) into the shape our callers consume. `profile` is
+ * the spine's hardware facts already mapped onto `devices` columns (see
+ * hardwareProfile.js) so the discovery worker can persist them as-is.
+ * `raw` keeps the original for anything else.
  */
 function normalizeSpine(item) {
   const id = item?.device?.id;
   if (!id) return null;
+  const profile = profileFromResource(item);
   return {
     device_id:        id,
-    device_type:      typeof item.device.board === 'string' && item.device.board.trim()
-                        ? item.device.board.trim().toLowerCase()
-                        : 'sb6',
+    device_type:      profile.device_type ?? 'sb6',
     firmware_version: item.device.firmware ?? null,
     status:           item.meta?.status ?? null,       // 'online'|'offline'|'unknown'
     last_seen:        item.meta?.lastSeen ?? null,
     deployed:         item.meta?.deployed ?? null,
     capabilities:     Array.isArray(item.capabilities) ? item.capabilities : [],
+    profile,
     raw:              item,
   };
 }
@@ -186,6 +190,24 @@ class SimkuraClient {
         error:  upstreamErrorMessage(err),
       };
     }
+  }
+
+  // ──────────────────────────────────────────────────────────────────────
+  // Boards — the public hardware catalog
+  // ──────────────────────────────────────────────────────────────────────
+
+  /**
+   * Every board generation on the platform with the capabilities /
+   * features / supported tiers its devices declare — the same three tiers
+   * as the device resource, readable before owning any hardware. Global
+   * platform facts (every caller sees the same list). Mirrored into
+   * `device_boards` by boardCatalog.refreshFromSimkura().
+   *
+   * @returns {Promise<{ boards: object[] }>}
+   */
+  async getBoards() {
+    const r = await this.client.get(`${API_V2}/boards`);
+    return r.data;
   }
 
   // ──────────────────────────────────────────────────────────────────────

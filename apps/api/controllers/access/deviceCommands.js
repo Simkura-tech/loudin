@@ -8,6 +8,8 @@
 
 const { query } = require('../../database/db');
 const { upstreamErrorMessage } = require('../../hardware/simkura');
+const boardCatalog = require('../../hardware/simkura/boardCatalog');
+const featureFlags = require('../../services/platform/featureFlags');
 
 function badRequest(res, message, details) {
   return res.status(400).json({ error: 'Bad Request', message, ...(details && { details }) });
@@ -44,6 +46,14 @@ const LOCK_STATES = new Set(['locked', 'unlocked', 'lockdown', 'normal']);
 const READER_TECHNOLOGIES = new Set(['prox', 'smartcard', 'nfc', 'ble', 'multi']);
 const DOOR = 1; // single-door model — same constant as devicePush
 
+// Which platform feature flag each ad-hoc command belongs to.
+const COMMAND_FEATURE = {
+  'lock.unlock':    'momentary_unlock',
+  'lock.set-state': 'door_mode',
+  'lock.configure': 'provisioning',
+  'device.reboot':  'maintenance',
+};
+
 // ── Authorization ────────────────────────────────────────────────────────────
 
 /**
@@ -60,7 +70,8 @@ async function authorizeDeviceAccess(req) {
   if (!hwId) return { ok: false, status: 400, message: 'Missing device id' };
 
   const { rows } = await query(
-    `SELECT id, device_id, device_name, company_id
+    `SELECT id, device_id, device_name, company_id,
+            device_type, manufacturer, supported
        FROM devices
       WHERE device_id = $1 AND deleted_at IS NULL
       LIMIT 1`,
@@ -106,6 +117,12 @@ async function sendCommand(req, res, next) {
         message: `command must be one of: ${[...ALLOWED_COMMANDS].join(', ')}`,
       });
     }
+
+    // Platform feature flag for this command (services/platform/featureFlags).
+    const feature = COMMAND_FEATURE[command];
+    if (feature && !(await featureFlags.isEnabled(feature))) {
+      return featureFlags.disabledResponse(res, feature);
+    }
     if (command === 'lock.set-state' && (!payload || !LOCK_STATES.has(payload.state))) {
       return res.status(400).json({
         error: 'Bad Request',
@@ -137,6 +154,24 @@ async function sendCommand(req, res, next) {
     const auth = await authorizeDeviceAccess(req);
     if (!auth.ok) {
       return res.status(auth.status).json({ error: auth.status === 404 ? 'Not Found' : 'Bad Request', message: auth.message });
+    }
+
+    // Board gate: readerTechnology must be in the board's supported list.
+    // The board catalog (device_boards) is the authority; the device's own
+    // reported tier is the fallback for a board the catalog doesn't list.
+    // A device with neither (never polled since migration 085, unknown
+    // board) is not gated — Simkura still answers 422 unsupported_feature.
+    if (command === 'lock.configure' && payload.readerTechnology != null && auth.device) {
+      const board   = (await boardCatalog.load()).resolve(auth.device);
+      const allowed = board?.supported?.['doors.reader.technology']
+                   ?? auth.device.supported?.['doors.reader.technology'];
+      if (Array.isArray(allowed) && !allowed.includes(payload.readerTechnology)) {
+        const name = board?.display_name ?? board?.board ?? 'this board';
+        return res.status(400).json({
+          error: 'Bad Request',
+          message: `readerTechnology "${payload.readerTechnology}" is not supported by ${name} (supported: ${allowed.join(', ') || 'none'})`,
+        });
+      }
     }
 
     const simkura = require('../../hardware/simkura').client;
@@ -192,6 +227,12 @@ async function pushDevice(req, res, next) {
     const deviceId = Number(req.params.id);
     if (!Number.isInteger(deviceId)) return badRequest(res, 'Invalid device id');
 
+    // A delta push is core sync and always allowed; the force rebuild
+    // (Re-sync) is a maintenance action behind its platform flag.
+    if (req.body?.force && !(await featureFlags.isEnabled('maintenance'))) {
+      return featureFlags.disabledResponse(res, 'maintenance');
+    }
+
     const { rows } = await query(
       `SELECT id, device_id, company_id
          FROM devices
@@ -234,6 +275,9 @@ async function clearDevice(req, res, next) {
   try {
     const deviceId = Number(req.params.id);
     if (!Number.isInteger(deviceId)) return badRequest(res, 'Invalid device id');
+    if (!(await featureFlags.isEnabled('maintenance'))) {
+      return featureFlags.disabledResponse(res, 'maintenance');
+    }
 
     const { rows } = await query(
       `SELECT id, device_id, company_id

@@ -18,6 +18,8 @@ const assert = require('node:assert/strict');
 
 const { normalizeSpine, upstreamErrorMessage } = require('../hardware/simkura/simkuraClient');
 const { fieldsFromState } = require('../hardware/simkura/stateSyncWorker');
+const { profileFromResource, bindValue } = require('../hardware/simkura/hardwareProfile');
+const { rowsFromCatalog, resolveBoard, publicBoard } = require('../hardware/simkura/boardCatalog');
 
 const V2_RESOURCE = {
   meta: {
@@ -60,6 +62,12 @@ describe('Simkura v2 — normalizeSpine', () => {
     assert.equal(n.last_seen, '2026-08-31T12:00:00.000Z');
     assert.equal(n.deployed, true);
     assert.deepEqual(n.capabilities, V2_RESOURCE.capabilities);
+    // Hardware profile rides along, pre-mapped to column names.
+    assert.equal(n.profile.manufacturer, 'Simkura');
+    assert.equal(n.profile.hardware_version, 'rev-b');
+    assert.equal(n.profile.num_doors, 1);
+    assert.deepEqual(n.profile.features, { 'door-position-sensing': false });
+    assert.deepEqual(n.profile.supported.cardFormats, ['26-bit', 'mifare-1k', 'hid-34', 'hid-37']);
   });
 
   test('missing device.id → null; missing board defaults to sb6', () => {
@@ -76,7 +84,13 @@ describe('Simkura v2 — fieldsFromState', () => {
     const f = fieldsFromState(V2_RESOURCE);
     assert.equal(f.status, 'online');
     assert.equal(f.door_state, 'locked');
+    assert.equal(f.door_position, null);              // fixture: feature off → null
     assert.equal(f.door_override, true);              // 2 (holiday) → true
+    assert.equal(f.door_override_mode, 'holiday');
+    assert.equal(f.reader_protocol, 'osdp');
+    assert.equal(f.reader_connection, 'secure');
+    assert.equal(f.reader_technology, 'prox');
+    assert.equal(f.battery_chemistry, 'alkaline');
     assert.equal(f.latch_interval_s, 5);
     assert.equal(f.fw_credential_count, 105);
     assert.equal(f.fw_shift_count, 4);
@@ -88,6 +102,18 @@ describe('Simkura v2 — fieldsFromState', () => {
     assert.equal(f.carrier, 'AT&T');
     assert.equal(f.signal_strength, -76);
     assert.ok(f.last_seen instanceof Date);
+    // Hardware profile (migration 085).
+    assert.equal(f.device_type, 'sb6');
+    assert.equal(f.manufacturer, 'Simkura');
+    assert.equal(f.hardware_version, 'rev-b');
+    assert.equal(f.num_doors, 1);
+    assert.equal(f.deployed, true);
+    assert.equal(f.power_type, 'battery');
+    assert.equal(f.connectivity_transport, 'cellular');
+    assert.deepEqual(f.capabilities, V2_RESOURCE.capabilities);
+    assert.deepEqual(f.features, V2_RESOURCE.features);
+    assert.deepEqual(f.supported, V2_RESOURCE.supported);
+    assert.deepEqual(f.card_formats, ['26-bit', 'mifare-1k', 'hid-34']);
     // v1-era columns must no longer be produced.
     for (const gone of ['osdp_stage', 'config_card_type', 'deep_sleep_duration_s', 'fw_door_shift_count']) {
       assert.ok(!(gone in f), `${gone} should not be written from v2`);
@@ -101,6 +127,21 @@ describe('Simkura v2 — fieldsFromState', () => {
       power: { batteryPct: 0, state: 'sleep' },
     });
     assert.deepEqual(f, { status: 'offline' });
+  });
+
+  test('never-seen device still mirrors its hardware profile', () => {
+    const f = fieldsFromState({
+      meta: { status: 'offline', lastSeen: null, deployed: false },
+      device: { id: 'x', board: 'SB8-4D', numDoors: 4 },
+      capabilities: ['lock-control'],
+      features: { 'door-position-sensing': true },
+      power: { type: 'plugin', batteryPct: 0 },
+    });
+    assert.deepEqual(f, {
+      status: 'offline', device_type: 'sb8-4d', num_doors: 4, deployed: false,
+      capabilities: ['lock-control'], features: { 'door-position-sensing': true },
+      power_type: 'plugin',
+    });
   });
 
   test("meta.status 'unknown' is not mirrored (column CHECK)", () => {
@@ -122,6 +163,37 @@ describe('Simkura v2 — fieldsFromState', () => {
     assert.equal(f.power_mode, 'active');
   });
 
+  test('reader block: wiegand clears connection; door position sensed; garbage dropped', () => {
+    const f = fieldsFromState({
+      meta: { status: 'online', lastSeen: '2026-08-31T12:00:00Z' },
+      device: { id: 'x' },
+      doors: [{ door: 1, lock: { state: 'locked', position: 'open' }, reader: { protocol: 'wiegand', connection: null, technology: 'bogus' } }],
+      power: { batteryChemistry: 'plutonium' },
+    });
+    assert.equal(f.door_position, 'open');
+    assert.ok(!('door_override_mode' in f));           // no override field → untouched
+    assert.equal(fieldsFromState({
+      meta: { status: 'online', lastSeen: '2026-08-31T12:00:00Z' }, device: { id: 'x' },
+      doors: [{ door: 1, lock: { state: 'locked', override: 1 } }],
+    }).door_override_mode, 'command');
+    assert.equal(fieldsFromState({
+      meta: { status: 'online', lastSeen: '2026-08-31T12:00:00Z' }, device: { id: 'x' },
+      doors: [{ door: 1, lock: { state: 'locked', override: 0 } }],
+    }).door_override_mode, 'none');
+    assert.equal(f.reader_protocol, 'wiegand');
+    assert.equal(f.reader_connection, null);
+    assert.equal(f.reader_technology, null);
+    assert.ok(!('battery_chemistry' in f));
+    // No reader block at all → reader columns untouched.
+    const g = fieldsFromState({
+      meta: { status: 'online', lastSeen: '2026-08-31T12:00:00Z' },
+      device: { id: 'x' },
+      doors: [{ door: 1, lock: { state: 'locked' } }],
+    });
+    assert.ok(!('reader_protocol' in g));
+    assert.ok(!('door_position' in g));
+  });
+
   test('missing capability blocks are simply omitted', () => {
     const f = fieldsFromState({
       meta: { status: 'online', lastSeen: '2026-08-31T12:00:00Z' },
@@ -131,6 +203,99 @@ describe('Simkura v2 — fieldsFromState', () => {
     assert.equal(f.status, 'online');
     assert.ok(!('door_state' in f));
     assert.ok(!('power_mode' in f));
+  });
+});
+
+describe('Simkura v2 — hardwareProfile', () => {
+  test('drops malformed tiers and out-of-CHECK enums instead of failing', () => {
+    const p = profileFromResource({
+      device: { id: 'x', board: '  ', manufacturer: 42, version: 'rev-c', numDoors: 0 },
+      meta: { deployed: 'yes' },
+      capabilities: ['lock-control', 7, ''],
+      features: { 'door-position-sensing': 'true', other: false },
+      supported: { cardFormats: ['hid-34', 3], bogus: 'not-a-list' },
+      cardFormats: 'hid-34',
+      power: { type: 'solar' },
+      connectivity: { transport: 'lora' },
+    });
+    assert.deepEqual(p, {
+      hardware_version: 'rev-c',
+      capabilities: ['lock-control'],
+      features: { other: false },
+      supported: { cardFormats: ['hid-34'] },
+    });
+  });
+
+  test('empty / non-object input yields no columns', () => {
+    assert.deepEqual(profileFromResource(null), {});
+    assert.deepEqual(profileFromResource('x'), {});
+    assert.deepEqual(profileFromResource({}), {});
+  });
+
+  test('bindValue stringifies JSON tiers only', () => {
+    assert.equal(bindValue('capabilities', ['power']), '["power"]');
+    assert.equal(bindValue('features', { a: true }), '{"a":true}');
+    assert.equal(bindValue('capabilities', null), null);
+    assert.equal(bindValue('num_doors', 2), 2);
+    assert.equal(bindValue('manufacturer', 'Simkura'), 'Simkura');
+  });
+});
+
+describe('Simkura v2 — boardCatalog', () => {
+  const CATALOG = {
+    boards: [
+      {
+        manufacturer: 'Simkura', board: 'SB6', displayName: 'Simkura SB6',
+        numDoors: 1, powerType: 'battery',
+        capabilities: ['lock-control', 'credential-store', 'schedules', 'power', 'connectivity'],
+        features: { 'door-position-sensing': false },
+        supported: { cardFormats: ['26-bit', 'mifare-1k', 'hid-34', 'hid-37'] },
+      },
+      { manufacturer: 'Simkura', board: 'SB8-4D', numDoors: 4, powerType: 'plugin', capabilities: ['lock-control'] },
+      { manufacturer: 'Acme', board: 'SB6', displayName: 'Acme SB6 clone', capabilities: [] },
+      { board: 'no-manufacturer' },
+      { manufacturer: 'Simkura', board: '   ' },
+    ],
+  };
+
+  test('rowsFromCatalog maps boards and drops rows without an identity pair', () => {
+    const rows = rowsFromCatalog(CATALOG);
+    assert.equal(rows.length, 3);
+    assert.deepEqual(rows[0], {
+      manufacturer: 'Simkura', board: 'SB6', display_name: 'Simkura SB6',
+      num_doors: 1, power_type: 'battery',
+      capabilities: ['lock-control', 'credential-store', 'schedules', 'power', 'connectivity'],
+      features: { 'door-position-sensing': false },
+      supported: { cardFormats: ['26-bit', 'mifare-1k', 'hid-34', 'hid-37'] },
+    });
+    // Missing tiers default to empty, not null, so consumers can index them.
+    assert.deepEqual(rows[1].features, {});
+    assert.deepEqual(rows[1].supported, {});
+    assert.equal(rows[1].display_name, null);
+    assert.deepEqual(rowsFromCatalog(null), []);
+    assert.deepEqual(rowsFromCatalog({ boards: 'nope' }), []);
+  });
+
+  test('resolveBoard matches device_type case-insensitively, manufacturer when known', () => {
+    const boards = rowsFromCatalog(CATALOG);
+    assert.equal(resolveBoard(boards, { device_type: 'sb6', manufacturer: 'Simkura' }).display_name, 'Simkura SB6');
+    assert.equal(resolveBoard(boards, { device_type: 'sb6', manufacturer: 'acme' }).display_name, 'Acme SB6 clone');
+    // Unknown manufacturer → first board with that designation (catalog order).
+    assert.equal(resolveBoard(boards, { device_type: 'sb6', manufacturer: null }).manufacturer, 'Simkura');
+    assert.equal(resolveBoard(boards, { device_type: 'SB8-4D' }).num_doors, 4);
+    // Manufacturer known but no match → null rather than a wrong board.
+    assert.equal(resolveBoard(boards, { device_type: 'sb6', manufacturer: 'Other' }), null);
+    assert.equal(resolveBoard(boards, { device_type: 'sb99' }), null);
+    assert.equal(resolveBoard(boards, {}), null);
+  });
+
+  test('publicBoard shapes a catalog row and passes null through', () => {
+    assert.equal(publicBoard(null), null);
+    const p = publicBoard({ manufacturer: 'Simkura', board: 'SB6', capabilities: ['power'] });
+    assert.deepEqual(p, {
+      manufacturer: 'Simkura', board: 'SB6', display_name: null, num_doors: null, power_type: null,
+      capabilities: ['power'], features: {}, supported: {}, synced_at: null,
+    });
   });
 });
 
@@ -184,6 +349,19 @@ describe('Simkura v2 — push mapping (devicePush._internal)', () => {
       credentialRemoveArgs({ credential_type: 'pin', credential_value: '12345' }),
       { credentialId: 12345, opts: { type: 'pin' } });
     assert.equal(credentialRemoveArgs({ credential_type: 'HID', card_number: null }), null);
+  });
+
+  test('holidayAddBody: firmware slot id, ISO window, access_mode → behavior', () => {
+    const { holidayAddBody } = require('../services/access/devicePush')._internal;
+    const base = { id: 9, start_datetime: new Date('2026-12-25T00:00:00Z'), end_datetime: '2026-12-26T00:00:00.000Z' };
+    assert.deepEqual(holidayAddBody({ ...base, access_mode: 'open' }, 3), {
+      holidayId: 3, start: '2026-12-25T00:00:00.000Z', end: '2026-12-26T00:00:00.000Z', behavior: 'unlocked',
+    });
+    assert.equal(holidayAddBody({ ...base, access_mode: 'locked' }, 1).behavior, 'locked');
+    assert.equal(holidayAddBody({ ...base, access_mode: 'lockdown' }, 1).behavior, 'lockdown');
+    // No firmware equivalent → unmappable, skipped by the push.
+    assert.equal(holidayAddBody({ ...base, access_mode: 'restricted' }, 1), null);
+    assert.equal(holidayAddBody({ ...base, access_mode: 'open', start_datetime: 'not a date' }, 1), null);
   });
 
   test('shiftAddBody: firmware slot id, HH:MM:SS, day names', () => {
