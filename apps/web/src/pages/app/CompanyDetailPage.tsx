@@ -15,7 +15,6 @@ import { useCallback, useEffect, useState } from 'react';
 import { Link, useParams } from 'react-router-dom';
 import styled from '@emotion/styled';
 import {
-  IconAlertTriangle,
   IconArrowLeft,
   IconBan,
   IconBuilding,
@@ -23,7 +22,6 @@ import {
   IconLock,
   IconPlayerPause,
   IconPlayerPlay,
-  IconTrash,
   IconUsers,
   IconX,
 } from '@tabler/icons-react';
@@ -99,11 +97,9 @@ const TypePill = styled.span<{ $type: CompanyType }>`
   text-transform: capitalize;
   background: ${({ $type }) =>
     $type === 'platform' ? '#dbeafe'
-  : $type === 'reseller' ? '#ede9fe'
   :                        '#f1f5f9'};
   color: ${({ $type }) =>
     $type === 'platform' ? '#1e40af'
-  : $type === 'reseller' ? '#5b21b6'
   :                        '#475569'};
 `;
 
@@ -544,8 +540,6 @@ type ActionModal =
   | { kind: 'suspend' }
   | { kind: 'reactivate' }
   | { kind: 'cancel' }
-  | { kind: 'reseller' }
-  | { kind: 'terminate' }
   | null;
 
 // ── Component ─────────────────────────────────────────────────────────────────
@@ -567,14 +561,7 @@ export function CompanyDetailPage() {
   // Termination uses its own state (typed confirmation to prevent misclicks
   // on an irreversible action; result shown post-success so admin sees the
   // end-user-unlocked count).
-  const [termCode,      setTermCode]      = useState<CancellationReasonCode>('other');
-  const [termDetails,   setTermDetails]   = useState('');
-  const [termConfirm,   setTermConfirm]   = useState('');
-  const [termResult,    setTermResult]    = useState<{ end_users_unlocked: number } | null>(null);
   const [actionBusy,    setActionBusy]    = useState(false);
-  // Reseller picker
-  const [resellerOptions, setResellerOptions] = useState<Company[]>([]);
-  const [pickedResellerId, setPickedResellerId] = useState<number | 'null'>('null');
   const [actionError,   setActionError]   = useState<string | null>(null);
 
   const load = useCallback(async () => {
@@ -609,20 +596,6 @@ export function CompanyDetailPage() {
     setSuspendReason('');
     setCancelCode('cost');
     setCancelDetails('');
-    setTermCode('other');
-    setTermDetails('');
-    setTermConfirm('');
-    setTermResult(null);
-    if (kind === 'reseller' && company) {
-      setPickedResellerId(company.parent_company_id ?? 'null');
-      // Lazy-load the reseller options the first time the picker is opened.
-      if (resellerOptions.length === 0) {
-        companiesApi
-          .list({ type: 'reseller', status: 'active', limit: 200 })
-          .then((r) => setResellerOptions(r.companies))
-          .catch(() => setResellerOptions([]));
-      }
-    }
     setModal({ kind });
   };
 
@@ -653,24 +626,6 @@ export function CompanyDetailPage() {
           cancelCode,
           cancelDetails.trim() || undefined,
         );
-      } else if (modal.kind === 'reseller') {
-        const newId = pickedResellerId === 'null' ? null : Number(pickedResellerId);
-        await companiesApi.setReseller(company.id, newId);
-      } else if (modal.kind === 'terminate') {
-        if (termConfirm.trim() !== company.name) {
-          setActionError(`Type the reseller name exactly to confirm: ${company.name}`);
-          setActionBusy(false);
-          return;
-        }
-        const r = await companiesApi.terminateReseller(
-          company.id,
-          termCode,
-          termDetails.trim() || undefined,
-        );
-        setTermResult({ end_users_unlocked: r.end_users_unlocked });
-        await load();
-        // Leave the modal open so the admin can read the result summary.
-        return;
       }
       setModal(null);
       await load();
@@ -750,14 +705,9 @@ export function CompanyDetailPage() {
                 <IconPlayerPlay size={14} /> Reactivate
               </ActionButton>
             )}
-            {company.status !== 'canceled' && company.company_type !== 'reseller' && (
+            {company.status !== 'canceled' && (
               <ActionButton type="button" $variant="danger" onClick={() => openModal('cancel')}>
                 <IconBan size={14} /> Cancel
-              </ActionButton>
-            )}
-            {company.status !== 'canceled' && company.company_type === 'reseller' && (
-              <ActionButton type="button" $variant="danger" onClick={() => openModal('terminate')}>
-                <IconTrash size={14} /> Terminate
               </ActionButton>
             )}
           </ActionGroup>
@@ -822,31 +772,6 @@ export function CompanyDetailPage() {
                 <dt>Address</dt>
                 <dd>{fmtAddress(company) || <span className="empty">—</span>}</dd>
               </DetailRow>
-              {company.company_type === 'end_user' && (
-                <DetailRow>
-                  <dt>Reseller</dt>
-                  <dd style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
-                    {company.parent_company_id && company.parent_company_name ? (
-                      <Link
-                        to={`/app/companies/${company.parent_company_id}`}
-                        style={{ color: 'inherit', textDecoration: 'underline' }}
-                      >
-                        {company.parent_company_name}
-                      </Link>
-                    ) : (
-                      <span style={{ color: '#64748b' }}>Direct (no reseller)</span>
-                    )}
-                    {company.parent_locked_at && (
-                      <span style={{ fontSize: 11, color: '#94a3b8' }}>
-                        · locked {fmtDate(company.parent_locked_at)}
-                      </span>
-                    )}
-                    <ActionButton type="button" onClick={() => openModal('reseller')} style={{ height: 26, padding: '0 10px', fontSize: 12 }}>
-                      Change
-                    </ActionButton>
-                  </dd>
-                </DetailRow>
-              )}
               <DetailRow>
                 <dt>Last updated</dt>
                 <dd>{fmtDate(company.updated_at)}</dd>
@@ -955,8 +880,6 @@ export function CompanyDetailPage() {
                 {modal.kind === 'suspend'    && `Suspend ${company.name}`}
                 {modal.kind === 'reactivate' && `Reactivate ${company.name}`}
                 {modal.kind === 'cancel'     && `Cancel ${company.name}`}
-                {modal.kind === 'reseller'   && `Change reseller for ${company.name}`}
-                {modal.kind === 'terminate'  && `Terminate reseller ${company.name}`}
               </h2>
               <IconButton type="button" onClick={closeModal} aria-label="Close">
                 <IconX size={16} />
@@ -1028,138 +951,30 @@ export function CompanyDetailPage() {
                 </>
               )}
 
-              {modal.kind === 'reseller' && (
-                <>
-                  <p className="lead">
-                    Override which reseller {company.name} is locked to. End-users
-                    can't change this themselves once set — only the platform team
-                    can. Pick <strong>None</strong> to move them back to Direct.
-                  </p>
-                  <Field>
-                    <span>Reseller *</span>
-                    <Select
-                      value={String(pickedResellerId)}
-                      onChange={(e) => {
-                        const v = e.target.value;
-                        setPickedResellerId(v === 'null' ? 'null' : Number(v));
-                      }}
-                    >
-                      <option value="null">None (direct customer)</option>
-                      {resellerOptions.map((r) => (
-                        <option key={r.id} value={r.id}>{r.name}</option>
-                      ))}
-                    </Select>
-                  </Field>
-                  {company.parent_company_id && pickedResellerId !== 'null'
-                    && Number(pickedResellerId) !== company.parent_company_id && (
-                      <div style={{
-                        padding: '8px 10px', borderRadius: 6,
-                        background: '#fef3c7', border: '1px solid #fde68a',
-                        color: '#78350f', fontSize: 12.5,
-                      }}>
-                        Reassigning a customer moves them to the new reseller.
-                        The audit log records the change.
-                      </div>
-                    )}
-                </>
-              )}
-
-              {modal.kind === 'terminate' && (
-                termResult ? (
-                  <>
-                    <p className="lead" style={{ color: '#166534' }}>
-                      <strong>{company.name} terminated.</strong>
-                    </p>
-                    <ul style={{ fontSize: 13, color: '#334155', paddingLeft: 18, margin: '8px 0 12px' }}>
-                      <li>{termResult.end_users_unlocked} end-user{termResult.end_users_unlocked === 1 ? '' : 's'} moved back to Direct.</li>
-                    </ul>
-                  </>
-                ) : (
-                  <>
-                    <div style={{
-                      padding: '10px 12px', borderRadius: 8,
-                      background: '#fef2f2', border: '1px solid #fecaca',
-                      color: '#991b1b', fontSize: 13, marginBottom: 12,
-                      display: 'flex', gap: 8, alignItems: 'flex-start',
-                    }}>
-                      <IconAlertTriangle size={18} style={{ flexShrink: 0, marginTop: 1 }} />
-                      <div>
-                        <div style={{ fontWeight: 600, marginBottom: 2 }}>This is irreversible.</div>
-                        <div>
-                          The reseller&apos;s status flips to <code>canceled</code> and every
-                          end-user locked to them moves back to Direct.
-                        </div>
-                      </div>
-                    </div>
-                    <Field>
-                      <span>Reason *</span>
-                      <Select
-                        value={termCode}
-                        onChange={(e) => setTermCode(e.target.value as CancellationReasonCode)}
-                      >
-                        {CANCELLATION_REASONS.map((r) => (
-                          <option key={r.code} value={r.code}>{r.label}</option>
-                        ))}
-                      </Select>
-                    </Field>
-                    <Field>
-                      <span>Details (optional)</span>
-                      <TextInput
-                        value={termDetails}
-                        onChange={(e) => setTermDetails(e.target.value)}
-                        placeholder="Context for the audit log (terms violation, non-payment, voluntary, etc.)"
-                      />
-                    </Field>
-                    <Field>
-                      <span>Type <code>{company.name}</code> to confirm *</span>
-                      <TextInput
-                        value={termConfirm}
-                        onChange={(e) => setTermConfirm(e.target.value)}
-                        placeholder={company.name}
-                        autoComplete="off"
-                      />
-                    </Field>
-                  </>
-                )
-              )}
-
               {actionError && (
                 <ErrorBanner style={{ marginBottom: 0 }}>{actionError}</ErrorBanner>
               )}
             </DialogBody>
             <DialogFooter>
-              {modal.kind === 'terminate' && termResult ? (
-                <ActionButton type="button" $variant="primary" onClick={() => setModal(null)}>
-                  Close
-                </ActionButton>
-              ) : (
-                <>
-                  <ActionButton type="button" onClick={closeModal} disabled={actionBusy}>
-                    Cancel
-                  </ActionButton>
-                  <ActionButton
-                    type="button"
-                    $variant={
-                      modal.kind === 'cancel' || modal.kind === 'terminate'
-                        ? 'danger'
-                        : modal.kind === 'suspend' ? 'warning'
-                        : 'primary'
-                    }
-                    onClick={performAction}
-                    disabled={
-                      actionBusy ||
-                      (modal.kind === 'terminate' && termConfirm.trim() !== company.name)
-                    }
-                  >
-                    {actionBusy ? 'Working…'
-                      : modal.kind === 'suspend'    ? 'Suspend tenant'
-                      : modal.kind === 'reactivate' ? 'Reactivate tenant'
-                      : modal.kind === 'reseller'   ? 'Save reseller'
-                      : modal.kind === 'terminate'  ? 'Terminate reseller'
-                      : 'Cancel tenant'}
-                  </ActionButton>
-                </>
-              )}
+              <ActionButton type="button" onClick={closeModal} disabled={actionBusy}>
+                Cancel
+              </ActionButton>
+              <ActionButton
+                type="button"
+                $variant={
+                  modal.kind === 'cancel'
+                    ? 'danger'
+                    : modal.kind === 'suspend' ? 'warning'
+                    : 'primary'
+                }
+                onClick={performAction}
+                disabled={actionBusy}
+              >
+                {actionBusy ? 'Working…'
+                  : modal.kind === 'suspend'    ? 'Suspend tenant'
+                  : modal.kind === 'reactivate' ? 'Reactivate tenant'
+                  : 'Cancel tenant'}
+              </ActionButton>
             </DialogFooter>
           </Dialog>
         </Backdrop>

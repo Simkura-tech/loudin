@@ -5,8 +5,8 @@
 --   * one platform company (`Loudin Platform`, company_type='platform')
 --   * one platform admin user (the first login)
 --
--- It does NOT seed devices, end-user companies, resellers, credentials,
--- shifts, holidays, or any fixture data — those are dev-only.
+-- It does NOT seed devices, end-user companies, credentials, shifts,
+-- holidays, or any fixture data — those are dev-only.
 --
 -- This file is idempotent: every INSERT uses ON CONFLICT DO NOTHING or
 -- "WHERE NOT EXISTS", so re-running won't duplicate records and is safe

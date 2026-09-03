@@ -82,7 +82,7 @@ async function optionalAuthenticate(req, res, next) {
 /**
  * Refuse the request when the caller's session is an impersonation
  * session. Apply this to routes that should never be reachable while a
- * reseller is acting "as" a customer — settings, billing, support, etc.
+ * platform admin is acting "as" a customer — settings, billing, support, etc.
  *
  * Returns 403 with a clear error so the frontend can route appropriately.
  */

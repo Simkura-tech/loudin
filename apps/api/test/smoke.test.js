@@ -19,7 +19,6 @@ const { pool } = require('../database/db');
 
 const SEEDED = {
   platform: { email: 'platform-admin@loudin.com', password: 'Password123!' },
-  reseller: { email: 'admin@acme-dist.example',    password: 'Password123!' },
   endUser:  { email: 'admin@democorp.example',      password: 'Password123!' },
 };
 
@@ -37,12 +36,11 @@ async function loginAs({ email, password }) {
 }
 
 describe('Loudin API — smoke tests', () => {
-  let platformCookie, resellerCookie, endUserCookie;
+  let platformCookie, endUserCookie;
 
   before(async () => {
-    [platformCookie, resellerCookie, endUserCookie] = await Promise.all([
+    [platformCookie, endUserCookie] = await Promise.all([
       loginAs(SEEDED.platform),
-      loginAs(SEEDED.reseller),
       loginAs(SEEDED.endUser),
     ]);
   });
@@ -142,11 +140,6 @@ describe('Loudin API — smoke tests', () => {
       assert.ok(res.body.user?.email, 'Response missing user.email field');
     });
 
-    test('GET /api/auth/me with reseller session → 200', async () => {
-      const res = await request(app).get('/api/auth/me').set('Cookie', resellerCookie);
-      assert.equal(res.status, 200);
-    });
-
     test('GET /api/auth/me with platform session → 200', async () => {
       const res = await request(app).get('/api/auth/me').set('Cookie', platformCookie);
       assert.equal(res.status, 200);
@@ -162,7 +155,6 @@ describe('Loudin API — smoke tests', () => {
       ['GET',   '/api/people-groups'],
       ['GET',   '/api/credentials'],
       ['GET',   '/api/devices'],
-      ['GET',   '/api/reseller/customers'],
       ['GET',   '/api/companies'],
       ['GET',   '/api/platform/devices'],
       ['GET',   '/api/platform/api-keys'],
@@ -278,28 +270,6 @@ describe('Loudin API — smoke tests', () => {
         assert.ok(d.board.capabilities.includes('lock-control'));
         assert.equal(d.board.features['door-position-sensing'], false);
       }
-    });
-
-  });
-
-  // ── Reseller admin ──────────────────────────────────────────────────────
-
-  describe('Reseller admin', () => {
-    test('GET /api/workspace → 200', async () => {
-      const res = await request(app).get('/api/workspace').set('Cookie', resellerCookie);
-      assert.equal(res.status, 200);
-    });
-
-    test('GET /api/reseller/customers → 200', async () => {
-      const res = await request(app).get('/api/reseller/customers').set('Cookie', resellerCookie);
-      assert.equal(res.status, 200);
-      assert.ok(Array.isArray(res.body.customers), 'Expected res.body.customers to be an array');
-    });
-
-    test('GET /api/reseller/devices → 200', async () => {
-      const res = await request(app).get('/api/reseller/devices').set('Cookie', resellerCookie);
-      assert.equal(res.status, 200);
-      assert.ok(Array.isArray(res.body.devices), 'Expected res.body.devices to be an array');
     });
 
   });

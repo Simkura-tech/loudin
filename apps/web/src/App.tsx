@@ -23,9 +23,6 @@ import AppLayout from './layouts/AppLayout';
 import OverviewPage from './pages/app/OverviewPage';
 import DirectoryPage from './pages/app/platform/DirectoryPage';
 import CompanyDetailPage from './pages/app/CompanyDetailPage';
-import ResellerCustomersPage from './pages/app/reseller/CustomersPage';
-import ResellerCustomerDetailPage from './pages/app/reseller/CustomerDetailPage';
-import ResellerFleetPage from './pages/app/reseller/FleetPage';
 import PeoplePage from './pages/app/PeoplePage';
 import PersonDetailPage from './pages/app/PersonDetailPage';
 import DevicesPage from './pages/app/DevicesPage';
@@ -76,9 +73,6 @@ function App() {
               <Route index element={<OverviewPage />} />
               <Route path="companies"     element={<DirectoryPage />} />
               <Route path="companies/:id" element={<CompanyDetailPage />} />
-              <Route path="customers"     element={<ResellerCustomersPage />} />
-              <Route path="customers/:id" element={<ResellerCustomerDetailPage />} />
-              <Route path="fleet"         element={<ResellerFleetPage />} />
               <Route path="people" element={<PeoplePage />} />
               <Route path="people/:id" element={<PersonDetailPage />} />
               <Route path="devices" element={<DevicesPage />} />

@@ -289,14 +289,13 @@ async function sweepOfflineAlerts() {
         AND d.last_seen IS NOT NULL
         AND d.last_seen < NOW() - make_interval(hours => $1)
       RETURNING d.device_id, d.last_seen, d.company_id,
-                c.company_type, c.parent_company_id`,
+                c.company_type`,
     [OFFLINE_ALERT_HOURS]
   );
 
   for (const r of rows) {
     void events.emit('device.offline_extended', {
       company:  { id: r.company_id, type: r.company_type },
-      reseller: r.parent_company_id ? { company_id: r.parent_company_id } : undefined,
       device: {
         device_id:     r.device_id,
         last_seen:     r.last_seen instanceof Date ? r.last_seen.toISOString() : r.last_seen,

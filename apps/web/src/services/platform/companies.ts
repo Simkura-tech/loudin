@@ -1,14 +1,14 @@
 /**
  * Companies API client — Platform Admin only.
  *
- * For end-user / reseller admins, the equivalent "your own company" surface
- * is services/workspace.ts. This client targets /api/companies which is
+ * For end-user admins, the equivalent "your own company" surface is
+ * services/workspace.ts. This client targets /api/companies which is
  * gated server-side by requirePlatformAdmin.
  */
 
 import api from '../api';
 
-export type CompanyType   = 'platform' | 'end_user' | 'reseller';
+export type CompanyType   = 'platform' | 'end_user';
 export type CompanyStatus = 'active' | 'inactive' | 'suspended' | 'canceled';
 
 export type CancellationReasonCode =
@@ -137,26 +137,6 @@ export const companiesApi = {
 
   cancel: (id: number, reason_code: CancellationReasonCode, details?: string) =>
     api.post<{ ok: true }, { ok: true }>(`/api/companies/${id}/cancel`, {
-      reason_code,
-      details: details ?? null,
-    }),
-
-  /** Platform-admin override of an end-user's reseller link. Pass
-   *  reseller_id=null to detach (move back to Direct). */
-  setReseller: (id: number, reseller_id: number | null) =>
-    api.post<{ ok: true }, { ok: true }>(`/api/companies/${id}/reseller`, { reseller_id }),
-
-  /**
-   * Terminate a reseller (irreversible). Unlocks every end-user under
-   * the reseller and stamps canceled_*.
-   *
-   * Returns the count of end-users that were unlocked.
-   */
-  terminateReseller: (id: number, reason_code: CancellationReasonCode, details?: string) =>
-    api.post<
-      { ok: true; end_users_unlocked: number },
-      { ok: true; end_users_unlocked: number }
-    >(`/api/companies/${id}/terminate`, {
       reason_code,
       details: details ?? null,
     }),

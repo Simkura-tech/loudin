@@ -18,7 +18,7 @@ const events = require('../../integrations/events');
 /**
  * @param {Object} p
  * @param {number} p.companyId
- * @param {string} p.companyType   'end_user' | 'reseller'
+ * @param {string} p.companyType   'end_user'
  * @param {string} p.companyName
  * @param {number} p.userId        the first Admin's user id
  * @param {string} p.email

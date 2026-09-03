@@ -1,13 +1,10 @@
 /**
  * Workspace API client — the signed-in user's company.
- *
- * Reseller-only Simkura credentials and audit columns are intentionally not
- * surfaced in this client; they're owned elsewhere.
  */
 
 import api from '../api';
 
-export type CompanyType = 'platform' | 'reseller' | 'end_user';
+export type CompanyType = 'platform' | 'end_user';
 export type CompanyStatus = 'active' | 'inactive' | 'suspended' | 'canceled';
 
 /** Notification preference toggles. Server stores as JSONB; unknown keys
@@ -56,8 +53,8 @@ export interface Workspace {
   tax_id: string | null;
   // Notification preferences
   notification_preferences: NotificationPreferences;
-  // Reseller (parent) link. Null for direct tenants. Once set,
-  // parent_locked_at is non-null and self-service edits are refused.
+  // Reserved parent-company link (unused since the reseller tier was
+  // removed). Always null.
   parent_company_id:   number | null;
   parent_company_name: string | null;
   parent_locked_at:    string | null;
@@ -97,21 +94,4 @@ export const workspaceApi = {
   update: (payload: WorkspacePatch) =>
     api.patch<{ workspace: Workspace }, { workspace: Workspace }>('/api/workspace', payload)
        .then((r) => r.workspace),
-
-  /** End-user self-attach to a reseller by id. Server refuses if the
-   *  workspace already has a parent (locked). Returns the updated
-   *  workspace with the parent_* fields populated. */
-  attachReseller: (reseller_id: number) =>
-    api.post<{ workspace: Workspace }, { workspace: Workspace }>(
-      '/api/workspace/attach-reseller',
-      { reseller_id },
-    ).then((r) => r.workspace),
-
-  /** Minimal list of active resellers for the attach-flow picker.
-   *  Returns [{id, name}] only. */
-  listResellers: () =>
-    api.get<
-      { resellers: { id: number; name: string }[] },
-      { resellers: { id: number; name: string }[] }
-    >('/api/workspace/resellers').then((r) => r.resellers),
 };

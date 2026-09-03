@@ -10,13 +10,12 @@
 -- so re-running doesn't create duplicates.
 --
 -- What you get after a --reset --seed:
---   * 5 companies — platform, two resellers (Acme Distribution, Second
---     Reseller Co), two end-users (Demo Customer Co ← Acme, Brookline
---     Coworking ← Second Reseller Co). The second pair exists so
---     cross-reseller boundaries can be exercised (and is required by
---     test/tenantIsolation.test.js); nothing else is seeded so the
---     platform companies/users views stay slim.
---   * 4 admin users (one per company except Brookline)
+--   * 3 companies — the platform (Loudin Platform) and two independent
+--     end-user companies: Demo Customer Co (the main fixture tenant) and
+--     Brookline Coworking (a second, unrelated tenant so cross-company
+--     isolation can be exercised by hand and by test/tenantIsolation.test.js).
+--     Company types are platform | end_user only — there is no reseller tier.
+--   * 3 admin users (one per company)
 --   * 12 people in the end-user company spread across 4 departments
 --   * 4 people groups
 --   * 3 devices on the end-user company — Simkura's three PUBLIC SANDBOX
@@ -36,7 +35,6 @@
 DO $seed$
 DECLARE
   platform_id INTEGER;
-  reseller_id INTEGER;
   end_user_id INTEGER;
 
   alice_id   INTEGER; bob_id     INTEGER; carol_id   INTEGER;
@@ -62,8 +60,8 @@ DECLARE
 
   shift_business INTEGER; shift_afterhrs INTEGER; shift_admin INTEGER;
 
-  -- Second reseller + customer for cross-tenant boundaries (tests + manual).
-  reseller_two INTEGER; eu_brookline INTEGER;
+  -- Second, unrelated end-user company for cross-tenant boundaries (tests + manual).
+  eu_brookline INTEGER;
 BEGIN
   IF EXISTS (SELECT 1 FROM companies LIMIT 1) THEN
     RAISE NOTICE 'Seed: companies table is not empty — skipping.';
@@ -76,14 +74,7 @@ BEGIN
   RETURNING id INTO platform_id;
 
   INSERT INTO companies (name, company_type, status, company_email, company_url, created_at, updated_at)
-  VALUES ('Acme Distribution', 'reseller', 'active', 'contact@acme-dist.example', 'https://acme-dist.example',
-          NOW() - INTERVAL '12 months', NOW() - INTERVAL '12 months')
-  RETURNING id INTO reseller_id;
-
-  INSERT INTO companies (name, company_type, status, company_email, company_url,
-                         parent_company_id, parent_locked_at, created_at, updated_at)
   VALUES ('Demo Customer Co', 'end_user', 'active', 'admin@democorp.example', 'https://democorp.example',
-          reseller_id, NOW() - INTERVAL '10 months',
           NOW() - INTERVAL '10 months', NOW() - INTERVAL '10 months')
   RETURNING id INTO end_user_id;
 
@@ -93,9 +84,6 @@ BEGIN
     password_hash, email_verified, email_verified_at, status
   ) VALUES
     (platform_id, 1, 'platform-admin@loudin.com', 'Platform', 'Admin',
-     '$2b$10$/sl9aeZKp7Kwh0vII3Mxx.WVvBnBbzxJ0jBZPbSQM2bmmQCfoB79y',
-     true, CURRENT_TIMESTAMP, 'active'),
-    (reseller_id, 1, 'admin@acme-dist.example', 'Acme', 'Admin',
      '$2b$10$/sl9aeZKp7Kwh0vII3Mxx.WVvBnBbzxJ0jBZPbSQM2bmmQCfoB79y',
      true, CURRENT_TIMESTAMP, 'active'),
     (end_user_id, 1, 'admin@democorp.example', 'Demo', 'Admin',
@@ -181,14 +169,14 @@ BEGIN
   -- values below mirror what the sandbox reports (2026-09) so the UI looks
   -- right before the first sync tick.
   INSERT INTO devices (
-    company_id, reseller_company_id, device_id, device_type, firmware_version,
+    company_id, device_id, device_type, firmware_version,
     device_name, location, status, door_state, battery_percent, battery_health,
     power_mode, last_seen, assigned_at,
     manufacturer, hardware_version, num_doors, power_type, connectivity_transport, deployed,
     capabilities, features, supported, card_formats,
     reader_protocol, reader_connection, reader_technology, battery_chemistry
   ) VALUES
-    (end_user_id, reseller_id, '00000000-0000-0000-0000-000000000010', 'sb6', '2.3.3',
+    (end_user_id, '00000000-0000-0000-0000-000000000010', 'sb6', '2.3.3',
      'Front Door',    'Main entrance, Floor 1', 'online',  'locked', 95, 'ok',
      'sleep',      CURRENT_TIMESTAMP - INTERVAL '2 minutes', CURRENT_TIMESTAMP - INTERVAL '30 days',
      'Simkura', NULL, 1, 'battery', 'cellular', TRUE,
@@ -199,14 +187,14 @@ BEGIN
      'osdp', 'secure', 'prox', 'alkaline')
   RETURNING id INTO dev_front;
   INSERT INTO devices (
-    company_id, reseller_company_id, device_id, device_type, firmware_version,
+    company_id, device_id, device_type, firmware_version,
     device_name, location, status, door_state, battery_percent, battery_health,
     power_mode, last_seen, assigned_at,
     manufacturer, hardware_version, num_doors, power_type, connectivity_transport, deployed,
     capabilities, features, supported, card_formats,
     reader_protocol, reader_connection, reader_technology, battery_chemistry
   ) VALUES
-    (end_user_id, reseller_id, '00000000-0000-0000-0000-000000000020', 'sb6', '2.3.3',
+    (end_user_id, '00000000-0000-0000-0000-000000000020', 'sb6', '2.3.3',
      'Back Entrance', 'Loading dock',           'offline', 'locked', 12, 'low',
      'deep_sleep', CURRENT_TIMESTAMP - INTERVAL '6 hours',   CURRENT_TIMESTAMP - INTERVAL '30 days',
      'Simkura', NULL, 1, 'battery', 'cellular', TRUE,
@@ -217,14 +205,14 @@ BEGIN
      'osdp', 'secure', 'prox', 'alkaline')
   RETURNING id INTO dev_back;
   INSERT INTO devices (
-    company_id, reseller_company_id, device_id, device_type, firmware_version,
+    company_id, device_id, device_type, firmware_version,
     device_name, location, status, door_state, battery_percent, battery_health,
     power_mode, last_seen, assigned_at,
     manufacturer, hardware_version, num_doors, power_type, connectivity_transport, deployed,
     capabilities, features, supported, card_formats,
     reader_protocol, reader_connection, reader_technology, battery_chemistry
   ) VALUES
-    (end_user_id, reseller_id, '00000000-0000-0000-0000-000000000030', 'sb6', '2.3.3',
+    (end_user_id, '00000000-0000-0000-0000-000000000030', 'sb6', '2.3.3',
      'Server Room',   'Floor 2, IT corridor',   'online',  'locked', 82, 'ok',
      'sleep',      CURRENT_TIMESTAMP - INTERVAL '1 minute',  CURRENT_TIMESTAMP - INTERVAL '14 days',
      'Simkura', NULL, 1, 'battery', 'cellular', TRUE,
@@ -411,38 +399,26 @@ BEGIN
        '{"reason":"lockdown","attemptedCredential":{"cardNumber":"04A12B3C"},"person":"Carol Nguyen"}'::jsonb,
        CURRENT_TIMESTAMP - INTERVAL '5 days', CURRENT_TIMESTAMP - INTERVAL '5 days');
 
-  -- ── Second reseller + its customer ───────────────────────────────────────
-  -- One unrelated reseller/customer pair (Second Reseller Co → Brookline) —
-  -- the
-  -- minimum for exercising cross-tenant boundaries by hand and for the
-  -- tenant-isolation tests. Deliberately nothing more: no extra tenants,
-  -- no devices (the only seeded locks are the three sandbox fixtures
-  -- above), so the platform companies/users views stay slim.
-
+  -- ── Second, unrelated end-user company ───────────────────────────────────
+  -- A separate tenant (Brookline Coworking) with its own admin — the minimum
+  -- for exercising cross-company isolation by hand and in the tenant-isolation
+  -- tests. Deliberately nothing more: no devices or people of its own (the
+  -- only seeded locks are the three sandbox fixtures above), so the platform
+  -- companies/users views stay slim.
   INSERT INTO companies (name, company_type, status, company_email, company_url, created_at, updated_at)
-    VALUES ('Second Reseller Co', 'reseller', 'active', 'sales@second-reseller.example', 'https://second-reseller.example',
+    VALUES ('Brookline Coworking', 'end_user', 'active', 'admin@brookline.example', 'https://brookline.example',
             NOW() - INTERVAL '7 months', NOW() - INTERVAL '7 months')
-    RETURNING id INTO reseller_two;
+    RETURNING id INTO eu_brookline;
 
-  -- Admin for the second reseller — same dev password (Password123!), so you
-  -- can sign in and confirm one reseller's admin can't see another's
-  -- customer drill-in by URL guessing.
   INSERT INTO users (
     company_id, user_type_id, email, first_name, last_name,
     password_hash, email_verified, email_verified_at, status
   ) VALUES
-    (reseller_two, 1, 'admin@second-reseller.example', 'Secondary', 'Admin',
+    (eu_brookline, 1, 'admin@brookline.example', 'Brookline', 'Admin',
      '$2b$10$/sl9aeZKp7Kwh0vII3Mxx.WVvBnBbzxJ0jBZPbSQM2bmmQCfoB79y',
      true, NOW() - INTERVAL '7 months', 'active');
 
-  INSERT INTO companies (name, company_type, status, company_email,
-                         parent_company_id, parent_locked_at, created_at, updated_at)
-    VALUES ('Brookline Coworking', 'end_user', 'active', 'admin@brookline.example',
-            reseller_two,  NOW() - INTERVAL '7 months',
-            NOW() - INTERVAL '7 months', NOW() - INTERVAL '7 months')
-    RETURNING id INTO eu_brookline;
-
-  RAISE NOTICE 'Seed complete: % companies (platform, 2 resellers, 2 end-users), % devices (the 3 Simkura sandbox fixtures), % credentials, ~23 events.',
+  RAISE NOTICE 'Seed complete: % companies (platform + 2 end-users), % devices (the 3 Simkura sandbox fixtures), % credentials, ~23 events.',
     (SELECT COUNT(*) FROM companies),
     (SELECT COUNT(*) FROM devices),
     (SELECT COUNT(*) FROM credentials);

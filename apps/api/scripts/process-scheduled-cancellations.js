@@ -21,7 +21,6 @@
  *
  * NOT done here (deferred):
  *   - Email to the canceling admin
- *   - Webhook out to a reseller when their end-user cancels
  */
 
 require('dotenv').config({ path: require('path').join(__dirname, '..', '.env') });

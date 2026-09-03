@@ -249,7 +249,3 @@ is gone — record counts arrive with every state sync.)
   lockdown only, and the push skips a `restricted` row as unmappable.
 - **Multi-door devices**: v2 models `doors[]` as first-class; Loudin
   currently mirrors door 1 only.
-- **Per-reseller Simkura accounts**: the schema (`companies.simkura_api_key`
-  / `simkura_api_url`) and client support per-reseller credentials, but the
-  current release routes all device traffic through the platform
-  credentials. Roadmap.

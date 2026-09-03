@@ -12,7 +12,6 @@ import {
   IconArrowsLeftRight,
   IconLayoutDashboard,
   IconUsers,
-  IconUsersGroup,
   IconBuilding,
   IconKey,
   IconPlugConnected,
@@ -100,7 +99,6 @@ const CompanyBadge = styled.div`
 
 const COMPANY_TYPE_BADGE: Record<string, { label: string; bg: string; fg: string }> = {
   platform: { label: 'Platform', bg: '#fef3c7', fg: '#78350f' },
-  reseller: { label: 'Reseller', bg: '#e0e7ff', fg: '#3730a3' },
   end_user: { label: 'End user', bg: '#d1fae5', fg: '#065f46' },
 };
 
@@ -387,10 +385,9 @@ export function AppLayout() {
   const initials = `${user.first_name[0] || ''}${user.last_name[0] || ''}`.toUpperCase();
   const isImpersonating = !!user.impersonation;
   // Role gates use the user's *current* company_type. During impersonation
-  // company_type='end_user' (the impersonated tenant), so reseller-only
-  // and platform-only UI is naturally hidden.
+  // company_type='end_user' (the impersonated tenant), so platform-only UI
+  // is naturally hidden.
   const isPlatformAdmin = !isImpersonating && user.user_type_id === 1 && user.company_type === 'platform';
-  const isResellerAdmin = !isImpersonating && user.user_type_id === 1 && user.company_type === 'reseller';
   const isAdmin         = user.user_type_id === 1;
   // Only admins can rename the workspace (PATCH /api/workspace is admin-only),
   // so only they see the prompt. Hidden while impersonating.
@@ -430,11 +427,11 @@ export function AppLayout() {
     try {
       await auth.endImpersonation();
       await refresh();
-      // Send the reseller back to the customer they were just viewing.
+      // Send the platform admin back to the company they were just viewing.
       // user.company_id at this point is still the impersonated tenant
       // (refresh hasn't applied yet from this closure's perspective).
       const impersonatedId = user.company_id;
-      navigate(`/app/customers/${impersonatedId}`);
+      navigate(`/app/companies/${impersonatedId}`);
     } catch {
       // If the exit fails the cookie is still impersonation-scoped — the
       // user can retry. Surface no error here; the banner stays put.
@@ -529,27 +526,19 @@ export function AppLayout() {
               </NavItem>
             </>
           ) : (
-            // Reseller (dealer/installer) and end-user admins.
+            // End-user admins.
             <>
               <NavItem to="/app" end>
                 <IconLayoutDashboard size={18} strokeWidth={1.75} />
                 Overview
               </NavItem>
-              {isResellerAdmin ? (
-                // Reseller admins manage end-user companies they sell to.
-                <NavItem to="/app/customers">
-                  <IconUsersGroup size={18} strokeWidth={1.75} />
-                  Customers
-                </NavItem>
-              ) : (
-                <NavItem to="/app/people">
-                  <IconUsers size={18} strokeWidth={1.75} />
-                  People
-                </NavItem>
-              )}
-              <NavItem to={isResellerAdmin ? '/app/fleet' : '/app/devices'}>
+              <NavItem to="/app/people">
+                <IconUsers size={18} strokeWidth={1.75} />
+                People
+              </NavItem>
+              <NavItem to="/app/devices">
                 <IconLock size={18} strokeWidth={1.75} />
-                {isResellerAdmin ? 'Fleet' : 'Devices'}
+                Devices
               </NavItem>
               <NavItem to="/app/settings">
                 <IconSettings size={18} strokeWidth={1.75} />

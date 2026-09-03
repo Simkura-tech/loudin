@@ -3,10 +3,10 @@
 /**
  * Signup / register-flow tests — POST /api/auth/register.
  *
- * The register flow is end-user-only (companyType is limited to 'end_user';
- * resellers are created by platform admins) and gated by the
- * platform_config 'signups.enabled' toggle (services/platform/
- * instanceSettings.js) with a SIGNUPS_DISABLED 403 when closed.
+ * The register flow is end-user-only (companyType is limited to 'end_user')
+ * and gated by the platform_config 'signups.enabled' toggle
+ * (services/platform/instanceSettings.js) with a SIGNUPS_DISABLED 403 when
+ * closed.
  *
  * Requires a running local PostgreSQL with the DB seeded:
  *   npm run db:reset   (from apps/api)
@@ -119,7 +119,7 @@ describe('Loudin API — signup flow', () => {
       assert.equal(rows.length, 1);
       assert.equal(rows[0].company_type, 'end_user');
       assert.equal(rows[0].status, 'active');
-      assert.equal(rows[0].parent_company_id, null, 'Open signup must not attach a reseller');
+      assert.equal(rows[0].parent_company_id, null, 'Signup must not set a parent company');
     });
 
     test('login works with the newly registered credentials', async () => {

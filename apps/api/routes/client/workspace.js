@@ -12,7 +12,6 @@ const { requireAdmin } = require('../../middleware/core/rbac');
 const {
   get, update,
   scheduleCancel, undoScheduledCancel,
-  attachReseller, listResellers,
 } = require('../../controllers/tenancy/workspace');
 
 const router = express.Router();
@@ -25,8 +24,6 @@ router.get  ('/',                          get);
 router.patch('/',                          requireAdmin, denyImpersonation, update);
 router.post ('/cancel-subscription',       requireAdmin, denyImpersonation, scheduleCancel);
 router.post ('/cancel-subscription/undo',  requireAdmin, denyImpersonation, undoScheduledCancel);
-router.get  ('/resellers',                 denyImpersonation, listResellers);
-router.post ('/attach-reseller',           requireAdmin, denyImpersonation, attachReseller);
 
 module.exports = router;
 

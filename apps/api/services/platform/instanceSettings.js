@@ -30,8 +30,7 @@ function parseBool(value, fallback) {
  * Is open self-service signup allowed on this instance?
  *
  * platform_config 'signups.enabled' → env SIGNUPS_ENABLED → true.
- * Only OPEN signup is gated by this — invited flows (reseller customer
- * invites) are always allowed; callers enforce that distinction.
+ * Gates open self-service signup on this instance.
  */
 async function signupsEnabled() {
   const { rows } = await query(

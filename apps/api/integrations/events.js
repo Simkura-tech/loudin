@@ -12,7 +12,6 @@
  *   type        — e.g. 'company.signed_up', 'device.added'
  *   occurred_at — ISO-8601 timestamp
  *   company     — { id, type }  (the company the event happened in)
- *   reseller    — { company_id } (present when company.type === 'end_user')
  *   actor       — { user_id }    (present when a user triggered the event)
  *   device      — { device_id }  (present for device lifecycle events)
  *

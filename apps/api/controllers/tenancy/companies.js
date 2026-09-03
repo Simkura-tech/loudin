@@ -2,15 +2,14 @@
  * Companies controller — Platform Admin only.
  *
  * Tenant management surface for Loudin staff. Lists every company on the
- * platform with aggregate counts (users, devices) and the parent reseller
- * (if any). Status changes (suspend / cancel / reactivate) will land here
- * later — out of scope for the first cut.
+ * platform with aggregate counts (users, devices). Status changes
+ * (suspend / cancel / reactivate) live here too.
  */
 
 const { query } = require('../../database/db');
 const { recordAudit } = require('../../services/platform/audit');
 
-const ALLOWED_TYPES    = ['platform', 'end_user', 'reseller'];
+const ALLOWED_TYPES    = ['platform', 'end_user'];
 const ALLOWED_STATUSES = ['active', 'inactive', 'suspended', 'canceled'];
 const MAX_LIMIT = 200;
 
@@ -71,7 +70,7 @@ function publicCompany(row) {
 }
 
 // â”€â”€ GET /api/companies â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
-//   ?type=platform|end_user|reseller
+//   ?type=platform|end_user
 //   ?status=active|inactive|suspended|canceled
 //   ?search=…           matches name / company_email (ILIKE)
 //   ?limit=…&offset=…   (limit clamped to MAX_LIMIT)
@@ -359,135 +358,8 @@ async function cancel(req, res, next) {
   }
 }
 
-// â”€â”€ POST /api/companies/:id/reseller â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
-// Platform-admin override of an end-user's reseller link. Body:
-//   { reseller_id: number }  â†’ reassign / set
-//   { reseller_id: null }    â†’ detach (back to direct)
-// End-user-only target; platform / reseller companies have no parent.
-async function setReseller(req, res, next) {
-  try {
-    const id = Number(req.params.id);
-    const raw = req.body?.reseller_id;
-    const wantsDetach = raw === null;
-    const resellerId  = wantsDetach ? null : Number(raw);
-
-    if (!wantsDetach && (!Number.isFinite(resellerId) || resellerId <= 0)) {
-      return res.status(400).json({
-        error: 'Bad Request',
-        message: 'reseller_id must be a positive integer or null',
-      });
-    }
-
-    const company = await loadCompanyForAction(id);
-    if (!company) return notFound(res);
-    if (company.company_type !== 'end_user') {
-      return res.status(400).json({
-        error: 'Bad Request',
-        message: 'Only end-user companies can be linked to a reseller.',
-      });
-    }
-
-    let resellerName = null;
-    if (resellerId !== null) {
-      const { rows } = await query(
-        `SELECT id, name FROM companies
-          WHERE id = $1
-            AND company_type = 'reseller'
-            AND status = 'active'
-            AND deleted_at IS NULL`,
-        [resellerId]
-      );
-      if (rows.length === 0) {
-        return res.status(400).json({
-          error:   'Bad Request',
-          message: 'reseller_id does not match an active reseller.',
-        });
-      }
-      resellerName = rows[0].name;
-    }
-
-    await query(
-      `UPDATE companies
-          SET parent_company_id = $2::int,
-              parent_locked_at  = CASE WHEN $2::int IS NULL THEN NULL ELSE NOW() END,
-              updated_at        = NOW()
-        WHERE id = $1`,
-      [id, resellerId]
-    );
-
-    recordAudit(req, 'company.reseller_changed', {
-      target_type: 'company',
-      target_id:   id,
-      metadata:    {
-        reseller_id:   resellerId,
-        reseller_name: resellerName,
-        source:        'platform_admin',
-        detached:      wantsDetach,
-      },
-    });
-    return res.json({ ok: true });
-  } catch (err) {
-    return next(err);
-  }
-}
-
-// â”€â”€ POST /api/platform/companies/:id/terminate â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
-// Platform-admin-only. Reseller-only. Irreversible per v1 product decision:
-//   * Reseller row â†’ status='canceled' + canceled_* stamped.
-//   * Every end-user under this reseller has parent_company_id nulled.
-//
-// Body: { reason_code: string, details?: string }
-async function terminateReseller(req, res, next) {
-  try {
-    const id         = Number(req.params.id);
-    const reasonCode = (req.body?.reason_code ?? '').toString().trim();
-    const details    = (req.body?.details ?? '').toString().trim() || null;
-
-    if (!Number.isInteger(id) || id <= 0) {
-      return res.status(400).json({ error: 'Bad Request', message: 'invalid company id' });
-    }
-    if (!ALLOWED_CANCELLATION_REASON_CODES.has(reasonCode)) {
-      return res.status(400).json({
-        error:   'Bad Request',
-        message: `reason_code must be one of: ${[...ALLOWED_CANCELLATION_REASON_CODES].join(', ')}`,
-      });
-    }
-
-    const resellers = require('../../services/tenancy/resellers');
-    const result = await resellers.terminate(id, {
-      req,
-      reason:     details,
-      reasonCode,
-    });
-
-    if (!result.terminated) {
-      const status = result.reason === 'not_found' ? 404
-                   : result.reason === 'not_reseller' ? 400
-                   : 409; // already_terminated
-      return res.status(status).json({
-        error:   status === 404 ? 'Not Found' : status === 400 ? 'Bad Request' : 'Conflict',
-        code:    result.reason.toUpperCase(),
-        message: result.reason === 'not_reseller'
-                   ? 'Only resellers can be terminated through this endpoint.'
-                 : result.reason === 'already_terminated'
-                   ? 'Reseller is already terminated.'
-                   : 'Reseller not found.',
-      });
-    }
-
-    return res.json({
-      ok: true,
-      end_users_unlocked: result.end_users_unlocked,
-    });
-  } catch (err) {
-    return next(err);
-  }
-}
-
 module.exports = {
   list, get, listUsers, listDevices,
   suspend, reactivate, cancel,
-  setReseller,
-  terminateReseller,
   ALLOWED_CANCELLATION_REASON_CODES,
 };

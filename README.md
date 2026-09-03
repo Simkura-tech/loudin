@@ -22,12 +22,11 @@ tribute.
 
 ## Features
 
-- **Multi-tenant companies** — a three-tier hierarchy of platform, reseller, and end-user companies, each with scoped admin access
+- **Multi-tenant companies** — a platform operator plus any number of end-user companies, each with scoped admin access
 - **Device management** — claim, configure, and monitor IoT door locks through the Simkura REST API
 - **People & credentials** — manage credential holders and their PIN codes and cards, and push them to specific devices
 - **Schedules** — shifts and holidays control when credentials are valid, per device
 - **Real-time events** — device events stream in via inbound webhooks and reach the UI over WebSocket (Socket.io); signed outbound webhooks let external systems subscribe to lifecycle events
-- **Reseller tier** — optional partner companies that onboard and manage end-user customers via invite links; per-reseller Simkura account routing is designed into the schema (roadmap)
 
 ## Tech stack
 
@@ -82,9 +81,10 @@ Then open **http://localhost:8081** and log in with the seeded platform admin:
 |---|---|
 | `platform-admin@loudin.com` | `Password123!` |
 
-The seed also creates a reseller admin (`admin@acme-dist.example`) and an
-end-user company admin (`admin@democorp.example`) with the same password,
-plus demo people and credentials — see `apps/api/database/seeds/seed.sql`.
+The seed also creates two end-user company admins
+(`admin@democorp.example` and `admin@brookline.example`) with the same
+password, plus demo people and credentials — see
+`apps/api/database/seeds/seed.sql`.
 The only seeded devices are Simkura's three public **sandbox** locks
 (`00000000-0000-0000-0000-0000000000{10,20,30}`), already claimed by the
 end-user company, so device pages, state sync and pushes work out of the

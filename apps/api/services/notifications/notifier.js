@@ -192,8 +192,8 @@ async function sendOpsAlert({ subject, body }) {
 }
 
 /**
- * Send a templated transactional email. Used for non-OTP sends like the
- * reseller customer invite. Returns the same shape as sendCode/sendOpsAlert.
+ * Send a templated transactional email (non-OTP sends). Returns the same
+ * shape as sendCode/sendOpsAlert.
  *
  * @param {object} args
  * @param {string} args.to                    — destination email

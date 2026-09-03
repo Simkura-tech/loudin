@@ -20,7 +20,6 @@ import {
 
 const TYPE_OPTIONS: { value: CompanyType; label: string }[] = [
   { value: 'platform', label: 'Platform' },
-  { value: 'reseller', label: 'Reseller' },
   { value: 'end_user', label: 'End-user' },
 ];
 
@@ -151,11 +150,9 @@ const TypePill = styled.span<{ $type: CompanyType }>`
   text-transform: capitalize;
   background: ${({ $type }) =>
     $type === 'platform' ? '#dbeafe'
-  : $type === 'reseller' ? '#ede9fe'
   :                        '#f1f5f9'};
   color: ${({ $type }) =>
     $type === 'platform' ? '#1e40af'
-  : $type === 'reseller' ? '#5b21b6'
   :                        '#475569'};
 `;
 

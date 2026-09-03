@@ -3,8 +3,8 @@
  *
  * End-user-admin scope: tenant-scoped to req.user.company_id. Unclaimed
  * devices (company_id IS NULL) and other tenants' devices are not visible.
- * Reseller / platform views will come back as separate endpoints with
- * different filtering semantics — don't widen this one.
+ * The platform fleet view is a separate endpoint with different filtering
+ * semantics — don't widen this one.
  *
  * Live state (status, door_state, battery_percent, last_seen, power_mode)
  * is synced from Simkura via webhook + polling worker — this endpoint is
@@ -38,9 +38,9 @@ const DEVICE_COLUMNS = `
   deleted_at, released_at, released_by`;
 
 // Only the human-facing labels are editable from the end-user-admin UI.
-// device_id, firmware_version, live-state fields, and the reseller/assignment
-// columns are managed by provisioning / the device itself and intentionally
-// NOT touched here.
+// device_id, firmware_version, live-state, and assignment columns are
+// managed by provisioning / the device itself and intentionally NOT
+// touched here.
 const EDITABLE_FIELDS = ['device_name', 'location', 'notes'];
 
 function badRequest(res, message, details) {
@@ -619,7 +619,6 @@ async function claimDevice(req, res, next) {
 
     void events.emit('device.added', {
       company:  { id: companyId, type: company.company_type },
-      reseller: company.parent_company_id ? { company_id: company.parent_company_id } : undefined,
       actor:    { user_id: userId },
       device:   { device_id: row.device_id },
     });
@@ -680,7 +679,6 @@ async function releaseDevice(req, res, next) {
 
     void events.emit('device.removed', {
       company:  { id: companyId, type: row.company_type },
-      reseller: row.parent_company_id ? { company_id: row.parent_company_id } : undefined,
       actor:    { user_id: userId },
       device:   { device_id: row.device_id },
     });

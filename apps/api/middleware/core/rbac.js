@@ -4,8 +4,8 @@
  * The role model is two user_type rows + a company_type discriminator:
  *
  *   user_type_id = 1  Admin   — company-scoped admin; what kind of admin
- *                              (platform / reseller / end_user) is determined
- *                              by req.user.company_type.
+ *                              (platform / end_user) is determined by
+ *                              req.user.company_type.
  *   user_type_id = 2  User    — regular logged-in user, non-admin.
  *
  * Earlier "Installer" (user_type_id=3) was deleted in tasks #12–#14.
@@ -19,7 +19,6 @@ const USER_TYPES = {
 
 const COMPANY_TYPES = {
   PLATFORM: 'platform',
-  RESELLER: 'reseller',
   END_USER: 'end_user',
 };
 
@@ -54,7 +53,7 @@ function requirePlatformAdmin(req, res, next) {
 
 /**
  * Require the caller's company to be one of the allowed company_types.
- * Useful when an endpoint is scoped to (e.g.) resellers only.
+ * Useful when an endpoint is scoped to (e.g.) end-users only.
  */
 function requireCompanyType(...allowed) {
   return (req, res, next) => {

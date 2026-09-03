@@ -3,8 +3,8 @@
  *
  * Conventions
  * - Two user types: Admin (1), User (2). What kind of admin (platform admin,
- *   reseller admin, end-user admin) is determined by company.company_type.
- * - Three company types: 'platform', 'end_user', 'reseller'.
+ *   end-user admin) is determined by company.company_type.
+ * - Two company types: 'platform', 'end_user'.
  * - Door-access credential holders live in `people` (separate from `users`).
  */
 
@@ -39,7 +39,6 @@ export interface User {
 export const COMPANY_TYPES = {
   PLATFORM: 'platform',
   END_USER: 'end_user',
-  RESELLER: 'reseller',
 } as const;
 
 export type CompanyType = typeof COMPANY_TYPES[keyof typeof COMPANY_TYPES];
@@ -113,9 +112,7 @@ export type PowerMode   = 'active' | 'sleep' | 'deep_sleep';
 export interface Device {
   id: number;
   company_id?: number | null;                // null = unclaimed / pool
-  reseller_company_id?: number | null;
   device_id: string;                          // hardware serial / UUID
-  reseller_code?: string | null;
   device_type: string;                        // e.g. 'sb6'
   firmware_version?: string | null;
   device_name: string;

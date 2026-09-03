@@ -131,36 +131,7 @@ function opsAlertEmail({ subject, body }) {
   };
 }
 
-/**
- * Reseller customer invite — sent to a prospective end-user on the
- * reseller's behalf. The link carries the reseller's invite token, so
- * signing up through it attaches the new workspace to them automatically.
- */
-function resellerInviteEmail({ resellerName, inviteUrl }) {
-  const html = shell({
-    preheader: `${resellerName} invited you to Loudin.`,
-    bodyHtml: `
-      <p style="margin:0 0 12px;">Hi,</p>
-      <p style="margin:0 0 12px;"><strong>${escapeHtml(resellerName)}</strong> has invited you to create a workspace on Loudin — the platform for managing your cellular-connected door locks.</p>
-      <p style="margin:0 0 20px;">Signing up through the button below connects your workspace to ${escapeHtml(resellerName)} automatically, so they can support your devices from day one.</p>
-      <table role="presentation" cellpadding="0" cellspacing="0" border="0" align="center" style="margin:0 auto 20px;">
-        <tr><td style="border-radius:10px;background:${ACCENT};">
-          <a href="${escapeHtml(inviteUrl)}" style="display:inline-block;padding:12px 28px;font-size:15px;font-weight:600;color:#ffffff;text-decoration:none;border-radius:10px;">Create your account</a>
-        </td></tr>
-      </table>
-      <p style="margin:0;color:${TEXT_DIM};font-size:13px;">Or paste this link into your browser:<br><a href="${escapeHtml(inviteUrl)}" style="color:${ACCENT};word-break:break-all;">${escapeHtml(inviteUrl)}</a></p>
-    `,
-  });
-  const text = `${resellerName} has invited you to create a workspace on Loudin.\n\nSigning up through this link connects your workspace to ${resellerName} automatically:\n\n${inviteUrl}\n\n— the Loudin team`;
-  return {
-    subject: `${resellerName} invited you to Loudin`,
-    text,
-    html,
-  };
-}
-
 module.exports = {
   otpEmail,
   opsAlertEmail,
-  resellerInviteEmail,
 };

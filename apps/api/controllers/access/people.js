@@ -245,7 +245,6 @@ async function create(req, res, next) {
       if (cnt.n === 1 && comp) {
         void events.emit('company.first_person_added', {
           company:  { id: req.user.company_id, type: comp.company_type },
-          reseller: comp.parent_company_id ? { company_id: comp.parent_company_id } : undefined,
           actor:    { user_id: req.user.user_id },
           person:   { person_id: rows[0].id },
         });

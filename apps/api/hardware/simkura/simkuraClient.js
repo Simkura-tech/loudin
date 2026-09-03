@@ -19,7 +19,7 @@
  *   const simkura = require('./hardware/simkura');
  *   await simkura.client.unlockDoor(hwId);
  *
- * Or instantiate per-reseller:
+ * Or instantiate with alternate credentials:
  *   const { SimkuraClient } = require('./hardware/simkura');
  *   const client = new SimkuraClient({ apiUrl, apiKey });
  */
@@ -372,9 +372,7 @@ class SimkuraClient {
   // Webhook management  (POST/GET/PUT/DELETE /api/v1/webhooks[/...])
   //
   // Loudin registers ONE webhook against the platform's Simkura account
-  // pointing at /api/webhooks/simkura. Per-reseller webhooks (when a
-  // reseller has their own Simkura credentials on companies.simkura_api_key)
-  // are registered through a separate SimkuraClient instance.
+  // pointing at /api/webhooks/simkura.
   // ──────────────────────────────────────────────────────────────────────
 
   async listWebhooks() {

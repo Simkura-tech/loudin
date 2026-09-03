@@ -43,8 +43,7 @@ The single source of new event types is `services/platform/webhookEndpoints.js`
   "event_id":    "<uuid>",
   "type":        "<event.type>",
   "occurred_at": "<ISO-8601>",
-  "company":     { "id": 0, "type": "platform|reseller|end_user" },
-  "reseller":    { "company_id": 0 },
+  "company":     { "id": 0, "type": "platform|end_user" },
   "actor":       { "user_id": 0 },
   "device":      { "device_id": "..." }
 }

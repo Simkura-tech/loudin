@@ -30,8 +30,8 @@ const { recordAudit } = require('../../services/platform/audit');
 // â”€â”€ Helpers â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 const ADMIN_USER_TYPE_ID = 1;
-// Public self-serve signup creates end-user companies only. Resellers are
-// created by platform admins via the internal endpoints.
+// Public self-serve signup creates end-user companies only. The platform
+// company is seeded, not signed up.
 const ALLOWED_SIGNUP_COMPANY_TYPES = ['end_user'];
 
 function badRequest(res, message, details) {
@@ -107,50 +107,14 @@ function issueSession(res, userRow) {
   return token;
 }
 
-// â”€â”€ GET /api/auth/invite/:token â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
-// Public endpoint. Resolves a reseller customer-invite token so the signup
-// UI can show who the invite is from before the form is filled in.
-// register() re-resolves the token at submit time — same posture as the
-// dealer-code gate: never trust the earlier verify alone.
-//
-// Suspended / canceled / deleted resellers 404 the same as unknown tokens
-// so we don't leak account state.
-async function verifyInvite(req, res, next) {
-  try {
-    const token = String(req.params.token || '').trim();
-    if (!token) return badRequest(res, 'invite token is required');
-
-    const { rows } = await query(
-      `SELECT name FROM companies
-        WHERE customer_invite_token = $1
-          AND company_type = 'reseller'
-          AND status = 'active'
-          AND deleted_at IS NULL
-        LIMIT 1`,
-      [token]
-    );
-    if (rows.length === 0) {
-      return res.status(404).json({
-        error:   'Not Found',
-        message: 'This invite link is no longer valid.',
-      });
-    }
-    return res.json({ ok: true, reseller: { name: rows[0].name } });
-  } catch (err) {
-    return next(err);
-  }
-}
-
 // â”€â”€ POST /api/auth/register â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 //
 // Self-serve account creation for end-user companies. Creates the company
-// AND the user as the first Admin of that company. Resellers are created by
-// platform admins via the internal endpoints.
+// AND the user as the first Admin of that company.
 async function register(req, res, next) {
   try {
     const {
       firstName, lastName, email, password, companyName, companyType,
-      invite_token,
       terms_accepted,
     } = req.body || {};
 
@@ -172,51 +136,14 @@ async function register(req, res, next) {
     const strength = validatePasswordStrength(password);
     if (!strength.isValid) return badRequest(res, 'Password does not meet requirements', strength.errors);
 
-    // â”€â”€ Reseller invite (end-user signups only) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
-    // A signup arriving through a reseller's invite link carries the token;
-    // resolving it attaches the new company to that reseller at creation
-    // (same parent_company_id + parent_locked_at the self-service
-    // attach-reseller flow sets — see controllers/tenancy/workspace.js).
-    //
-    // Fail-closed on a stale token: silently creating an UNattached account
-    // would let the customer believe they're connected when they aren't.
-    // The UI verifies the token before submit, so this only fires when the
-    // link was rotated mid-signup.
-    let inviteReseller = null;
-    if (companyType === 'end_user' && invite_token) {
-      const token = String(invite_token).trim();
-      const { rows } = await query(
-        `SELECT id, name FROM companies
-          WHERE customer_invite_token = $1
-            AND company_type = 'reseller'
-            AND status = 'active'
-            AND deleted_at IS NULL
-          LIMIT 1`,
-        [token]
-      );
-      if (rows.length === 0) {
-        // Only suggest signing up without the invite when open signup is
-        // actually available on this instance.
-        return res.status(403).json({
-          error:   'Forbidden',
-          message: (await signupsEnabled())
-            ? 'This invite link is no longer valid. Ask your reseller for a new one, or sign up without it.'
-            : 'This invite link is no longer valid. Ask your reseller for a new one.',
-        });
-      }
-      inviteReseller = rows[0];
-    }
-
     // ── Signup toggle ─────────────────────────────────────────────────────
     // Private instances (the "own doors" deployment shape) close open
     // self-signup via platform_config signups.enabled / SIGNUPS_ENABLED.
-    // A signup arriving through a still-valid reseller invite is NOT open
-    // signup — the reseller vouched for it — so it stays allowed.
-    if (!inviteReseller && !(await signupsEnabled())) {
+    if (!(await signupsEnabled())) {
       return res.status(403).json({
         error:   'Forbidden',
         code:    'SIGNUPS_DISABLED',
-        message: 'Self-service signup is disabled on this instance. Ask your administrator or reseller for an invite.',
+        message: 'Self-service signup is disabled on this instance. Ask your administrator for an invite.',
       });
     }
 
@@ -243,19 +170,10 @@ async function register(req, res, next) {
       await client.query('BEGIN');
 
       const { rows: [company] } = await client.query(
-        `INSERT INTO companies (name, company_type, status,
-                                parent_company_id, parent_locked_at,
-                                name_auto_generated)
-         VALUES ($1, $2, 'active',
-                 $3::int,
-                 CASE WHEN $3::int IS NULL THEN NULL ELSE NOW() END,
-                 $4::boolean)
+        `INSERT INTO companies (name, company_type, status, name_auto_generated)
+         VALUES ($1, $2, 'active', $3::boolean)
          RETURNING id, name, company_type`,
-        [
-          resolvedCompanyName, companyType,
-          inviteReseller?.id ?? null,
-          nameAutoGenerated,
-        ]
+        [resolvedCompanyName, companyType, nameAutoGenerated]
       );
 
       // Stamp legal acceptance with the versions the SERVER considers
@@ -293,21 +211,6 @@ async function register(req, res, next) {
       throw e;
     } finally {
       client.release();
-    }
-
-    // Same audit action the self-service and platform-admin attach flows
-    // write, so "how did this link happen" is answerable from one query.
-    // req.user is absent here (anonymous signup) — actor columns stay null.
-    if (inviteReseller) {
-      recordAudit(req, 'company.reseller_attached', {
-        target_type: 'company',
-        target_id:   createdUser.company_id,
-        metadata: {
-          reseller_id:   inviteReseller.id,
-          reseller_name: inviteReseller.name,
-          source:        'reseller_invite',
-        },
-      });
     }
 
     // company.signed_up event — the shared completion path for every signup
@@ -784,6 +687,5 @@ module.exports = {
   verify2fa,
   twoFactorEnable, twoFactorConfirm, twoFactorDisable,
   forgotPassword, resetPassword,
-  verifyInvite,
   endImpersonation,
 };

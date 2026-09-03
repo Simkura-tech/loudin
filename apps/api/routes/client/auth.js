@@ -20,7 +20,6 @@ const {
   verify2fa,
   twoFactorEnable, twoFactorConfirm, twoFactorDisable,
   forgotPassword, resetPassword,
-  verifyInvite,
   endImpersonation,
 } = require('../../controllers/auth/auth');
 const { redirectToGoogle, handleCallback } = require('../../controllers/auth/googleAuth');
@@ -43,7 +42,6 @@ router.get('/google/callback', handleCallback);
 router.post('/register',         authAttemptLimiter, register);
 router.post('/login',            authAttemptLimiter, login);
 router.post('/verify-2fa',       authAttemptLimiter, verify2fa);
-router.get ('/invite/:token',    authAttemptLimiter, verifyInvite);
 router.post('/forgot-password',  authAttemptLimiter, forgotPassword);
 router.post('/reset-password',   authAttemptLimiter, resetPassword);
 router.post('/logout',           logout);

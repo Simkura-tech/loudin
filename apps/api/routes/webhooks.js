@@ -297,13 +297,12 @@ async function emitBatteryTransition(type, hwId, companyId, batteryPct) {
   if (!companyId) return;
   try {
     const { rows: [co] } = await query(
-      `SELECT company_type, parent_company_id FROM companies WHERE id = $1`,
+      `SELECT company_type FROM companies WHERE id = $1`,
       [companyId]
     );
     if (!co) return;
     void events.emit(type, {
       company:  { id: companyId, type: co.company_type },
-      reseller: co.parent_company_id ? { company_id: co.parent_company_id } : undefined,
       device:   {
         device_id: hwId,
         ...(Number.isFinite(batteryPct) ? { battery_percent: batteryPct } : {}),

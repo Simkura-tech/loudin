@@ -6,10 +6,13 @@
  * Verifies that:
  *   - end-user admins can only see/mutate rows in their own company
  *     (scoped queries → 404 for foreign ids, lists never leak rows),
- *   - end-user admins are walled off from reseller + platform surfaces (403),
- *   - reseller admins see only THEIR customers (unrelated end-users → 404),
+ *   - two unrelated end-user companies are walled off from each other in
+ *     both directions,
+ *   - end-user admins are walled off from the platform surface (403),
  *   - non-admin users (user_type_id=2) are rejected by requireAdmin (403),
  *   - unauthenticated requests are rejected (401).
+ *
+ * Company types are platform | end_user only — there is no reseller tier.
  *
  * Requires a running local PostgreSQL with the DB seeded:
  *   npm run db:reset   (from apps/api)
@@ -18,7 +21,7 @@
  *   npm test
  *
  * DB hygiene: every row this file creates (a fixture person + credential in
- * an unrelated end-user company, and one non-admin user) is deleted in the
+ * the second end-user company, and one non-admin user) is deleted in the
  * after hook. Seeded rows are only ever read, never mutated — the mutation
  * attempts below are expected to match 0 rows, and we assert that.
  */
@@ -31,10 +34,9 @@ const app = require('../server');
 const { pool } = require('../database/db');
 
 const SEEDED = {
-  platform:      { email: 'platform-admin@loudin.com', password: 'Password123!' },
-  reseller:      { email: 'admin@acme-dist.example',    password: 'Password123!' },
-  otherReseller: { email: 'admin@second-reseller.example', password: 'Password123!' },
-  endUser:       { email: 'admin@democorp.example',     password: 'Password123!' },
+  platform:     { email: 'platform-admin@loudin.com', password: 'Password123!' },
+  endUser:      { email: 'admin@democorp.example',    password: 'Password123!' },
+  otherEndUser: { email: 'admin@brookline.example',   password: 'Password123!' },
 };
 
 // Same bcrypt hash the seed uses for Password123! — reused for the
@@ -71,36 +73,34 @@ async function cleanFixtures() {
 }
 
 describe('Loudin API — tenant isolation', () => {
-  let platformCookie, resellerCookie, otherResellerCookie, endUserCookie, nonAdminCookie;
+  let platformCookie, endUserCookie, otherEndUserCookie, nonAdminCookie;
 
   // Seeded company ids (resolved by name, not hard-coded)
-  let demoId, acmeId, brooklineId;
+  let demoId, brooklineId;
 
-  // Seeded rows in the end-user company (read-only)
+  // Seeded rows in the primary end-user company (read-only)
   let demoPeopleIds, demoCredentialIds, demoDeviceIds;
   let demoPersonId, demoDeviceId;
 
-  // Fixture rows in the UNRELATED end-user company (created here, deleted in
-  // after). The seed deliberately gives that company no devices — only the
-  // three Simkura sandbox locks are seeded, on Demo Customer Co — so the
-  // foreign device is a fixture too.
+  // Fixture rows in the SECOND end-user company (Brookline; created here,
+  // deleted in after). The seed gives Brookline no devices/people of its
+  // own, so the foreign records are fixtures.
   let foreignPersonId, foreignCredentialId, foreignDeviceId;
 
   before(async () => {
     // ── Resolve seeded companies ─────────────────────────────────────────
     const { rows: companies } = await pool.query(
       `SELECT id, name FROM companies
-        WHERE name IN ('Demo Customer Co', 'Acme Distribution', 'Brookline Coworking')`
+        WHERE name IN ('Demo Customer Co', 'Brookline Coworking')`
     );
     const byName = Object.fromEntries(companies.map((c) => [c.name, c.id]));
     demoId      = byName['Demo Customer Co'];
-    acmeId      = byName['Acme Distribution'];
     brooklineId = byName['Brookline Coworking'];
-    assert.ok(demoId && acmeId && brooklineId, 'Seeded companies missing — run npm run db:reset');
+    assert.ok(demoId && brooklineId, 'Seeded companies missing — run npm run db:reset');
 
     await cleanFixtures();
 
-    // ── Fixture rows in the unrelated company (Brookline ← the 2nd reseller) ─
+    // ── Fixture rows in the second end-user company (Brookline) ──────────
     ({ rows: [{ id: foreignPersonId }] } = await pool.query(
       `INSERT INTO people (company_id, first_name, last_name, email, status)
        VALUES ($1, 'Foreign', 'Fixture', $2, 'active') RETURNING id`,
@@ -117,7 +117,7 @@ describe('Loudin API — tenant isolation', () => {
       [brooklineId, FOREIGN_DEVICE_HW_ID]
     ));
 
-    // ── Non-admin (user_type_id=2) fixture user in the end-user company ──
+    // ── Non-admin (user_type_id=2) fixture user in the primary company ───
     await pool.query(
       `INSERT INTO users (company_id, user_type_id, email, first_name, last_name,
                           password_hash, email_verified, email_verified_at, status)
@@ -125,7 +125,7 @@ describe('Loudin API — tenant isolation', () => {
       [demoId, NON_ADMIN.email, SEED_PASSWORD_HASH]
     );
 
-    // ── Snapshot the end-user company's rows for subset assertions ───────
+    // ── Snapshot the primary company's rows for subset assertions ────────
     const [people, creds, devices] = await Promise.all([
       pool.query('SELECT id FROM people WHERE company_id = $1', [demoId]),
       pool.query('SELECT id FROM credentials WHERE company_id = $1', [demoId]),
@@ -138,12 +138,11 @@ describe('Loudin API — tenant isolation', () => {
     demoPersonId = Math.min(...demoPeopleIds);
     demoDeviceId = Math.min(...demoDeviceIds);
 
-    [platformCookie, resellerCookie, otherResellerCookie, endUserCookie, nonAdminCookie] =
+    [platformCookie, endUserCookie, otherEndUserCookie, nonAdminCookie] =
       await Promise.all([
         loginAs(SEEDED.platform),
-        loginAs(SEEDED.reseller),
-        loginAs(SEEDED.otherReseller),
         loginAs(SEEDED.endUser),
+        loginAs(SEEDED.otherEndUser),
         loginAs(NON_ADMIN),
       ]);
   });
@@ -267,13 +266,35 @@ describe('Loudin API — tenant isolation', () => {
     });
   });
 
-  // ── Role walls — end-user admins have no reseller/platform surface ──────
+  // ── Reverse isolation — the SECOND end-user cannot see the FIRST's rows ──
 
-  describe('End-user admin: reseller + platform endpoints → 403', () => {
+  describe('Second end-user admin: the first company\'s records are invisible', () => {
+    test('GET /api/people/:id of the first company → 404', async () => {
+      const res = await request(app)
+        .get(`/api/people/${demoPersonId}`).set('Cookie', otherEndUserCookie);
+      assert.equal(res.status, 404);
+      assert.ok(!res.body.person, 'First company person leaked to the second');
+    });
+
+    test('GET /api/devices/:id of the first company → 404', async () => {
+      const res = await request(app)
+        .get(`/api/devices/${demoDeviceId}`).set('Cookie', otherEndUserCookie);
+      assert.equal(res.status, 404);
+      assert.ok(!res.body.device, 'First company device leaked to the second');
+    });
+
+    test('GET /api/people lists only the second company (which has none seeded)', async () => {
+      const res = await request(app).get('/api/people?limit=200').set('Cookie', otherEndUserCookie);
+      assert.equal(res.status, 200);
+      assert.ok(!res.body.people.some((p) => demoPeopleIds.has(p.id)),
+        'First company people leaked into the second company list');
+    });
+  });
+
+  // ── Role walls — end-user admins have no platform surface ────────────────
+
+  describe('End-user admin: platform endpoints → 403', () => {
     const walled = [
-      ['GET', '/api/reseller/customers'],
-      ['GET', '/api/reseller/devices'],
-      ['GET', '/api/reseller/invite'],
       ['GET', '/api/companies'],
       ['GET', '/api/platform/devices'],
       ['GET', '/api/platform/api-keys'],
@@ -290,64 +311,6 @@ describe('Loudin API — tenant isolation', () => {
     test('GET /api/companies/:ownId → 403 (even own company via platform surface)', async () => {
       const res = await request(app).get(`/api/companies/${demoId}`).set('Cookie', endUserCookie);
       assert.equal(res.status, 403);
-    });
-  });
-
-  // ── Reseller scoping ────────────────────────────────────────────────────
-
-  describe('Reseller admin: customers are scoped to parent_company_id', () => {
-    test('GET /api/reseller/customers lists own customers only', async () => {
-      const res = await request(app)
-        .get('/api/reseller/customers').set('Cookie', resellerCookie);
-      assert.equal(res.status, 200);
-      const ids = res.body.customers.map((c) => c.id);
-      assert.ok(ids.includes(demoId), 'Expected own customer (Demo Customer Co) in list');
-      assert.ok(!ids.includes(brooklineId), "Another reseller's customer leaked into the list");
-    });
-
-    test('GET /api/reseller/customers/:ownCustomerId → 200', async () => {
-      const res = await request(app)
-        .get(`/api/reseller/customers/${demoId}`).set('Cookie', resellerCookie);
-      assert.equal(res.status, 200);
-      assert.equal(res.body.customer?.id, demoId);
-    });
-
-    test("GET /api/reseller/customers/:id of another reseller's customer → 404", async () => {
-      const res = await request(app)
-        .get(`/api/reseller/customers/${brooklineId}`).set('Cookie', resellerCookie);
-      assert.equal(res.status, 404, `Expected 404, got ${res.status}: ${JSON.stringify(res.body)}`);
-      assert.ok(!res.body.customer, 'Unrelated customer data must not be returned');
-    });
-
-    test('GET /api/reseller/customers/:unrelatedId/devices → 404', async () => {
-      const res = await request(app)
-        .get(`/api/reseller/customers/${brooklineId}/devices`).set('Cookie', resellerCookie);
-      assert.equal(res.status, 404);
-    });
-
-    test('GET /api/reseller/customers/:unrelatedId/users → 404', async () => {
-      const res = await request(app)
-        .get(`/api/reseller/customers/${brooklineId}/users`).set('Cookie', resellerCookie);
-      assert.equal(res.status, 404);
-    });
-
-    test("cross-reseller: the other reseller's admin cannot read Acme's customer → 404", async () => {
-      const res = await request(app)
-        .get(`/api/reseller/customers/${demoId}`).set('Cookie', otherResellerCookie);
-      assert.equal(res.status, 404);
-    });
-
-    test("GET /api/people/:id of a customer's person → 404 (reseller has no people surface)", async () => {
-      const res = await request(app)
-        .get(`/api/people/${demoPersonId}`).set('Cookie', resellerCookie);
-      assert.equal(res.status, 404);
-    });
-
-    test('reseller admin cannot reach platform endpoints → 403', async () => {
-      for (const path of ['/api/companies', '/api/platform/devices', '/api/audit']) {
-        const res = await request(app).get(path).set('Cookie', resellerCookie);
-        assert.equal(res.status, 403, `${path}: expected 403, got ${res.status}`);
-      }
     });
   });
 
@@ -408,8 +371,8 @@ describe('Loudin API — tenant isolation', () => {
       assert.equal(res.status, 403);
     });
 
-    test('platform + reseller surfaces → 403', async () => {
-      for (const path of ['/api/companies', '/api/platform/devices', '/api/audit', '/api/reseller/customers']) {
+    test('platform surfaces → 403', async () => {
+      for (const path of ['/api/companies', '/api/platform/devices', '/api/audit']) {
         const res = await request(app).get(path).set('Cookie', nonAdminCookie);
         assert.equal(res.status, 403, `${path}: expected 403, got ${res.status}`);
       }
@@ -427,7 +390,6 @@ describe('Loudin API — tenant isolation', () => {
         ['post',   '/api/people'],
         ['patch',  `/api/people/${demoPersonId}`],
         ['delete', `/api/people/${demoPersonId}`],
-        ['get',    '/api/reseller/customers'],
         ['get',    '/api/companies'],
         ['get',    '/api/audit'],
       ];

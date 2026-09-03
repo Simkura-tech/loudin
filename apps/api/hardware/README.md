@@ -18,9 +18,7 @@ hardware/
 
 `simkura/simkuraClient.js` handles device discovery, command routing, and
 Simkura-side webhook management. Credentials resolve via the platform-admin
-Integrations UI / env vars (`SIMKURA_API_URL`, `SIMKURA_API_KEY`) with
-optional per-reseller overrides via `companies.simkura_api_key` /
-`companies.simkura_api_url`.
+Integrations UI / env vars (`SIMKURA_API_URL`, `SIMKURA_API_KEY`).
 
 ```javascript
 const simkura = require('../hardware/simkura');

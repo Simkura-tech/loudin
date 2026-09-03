@@ -5,12 +5,9 @@
  *   const simkura = require('./hardware/simkura');
  *   await simkura.client.unlockDoor(hardwareDeviceId);
  *
- * Usage (per-reseller credentials):
+ * Usage (alternate credentials — e.g. a second Simkura account):
  *   const { SimkuraClient } = require('./hardware/simkura');
- *   const client = new SimkuraClient({
- *     apiUrl: company.simkura_api_url,
- *     apiKey: company.simkura_api_key,
- *   });
+ *   const client = new SimkuraClient({ apiUrl, apiKey });
  */
 
 const client = require('./simkuraClient');
@@ -19,7 +16,7 @@ const { SimkuraClient, upstreamErrorMessage } = client;
 
 module.exports = {
   client,           // singleton instance
-  SimkuraClient,    // class for per-reseller instances
+  SimkuraClient,    // class for alternate-credential instances
   upstreamErrorMessage, // human-readable message from a Simkura error response
   config,
 };

@@ -1,11 +1,10 @@
 /**
  * Workspace controller — the signed-in user's company.
  *
- * GET returns the full company record (minus reseller-internal fields like
- * the Simkura API key). PATCH lets an Admin edit the human-managed columns:
- * display name, contact info, structured address. Everything else
- * (company_type, parent_company_id, status, audit columns, Simkura
- * credentials) is owned elsewhere and not editable here.
+ * GET returns the full company record. PATCH lets an Admin edit the
+ * human-managed columns: display name, contact info, structured address.
+ * Everything else (company_type, status, audit columns) is owned elsewhere
+ * and not editable here.
  */
 
 const { query } = require('../../database/db');
@@ -107,8 +106,8 @@ function publicCompany(row) {
     tax_id:                   row.tax_id,
     // Notification toggles (JSONB)
     notification_preferences: row.notification_preferences,
-    // Reseller (parent) link. Joined on the GET path; null for direct
-    // tenants or non-end-user companies.
+    // Reserved parent-company link (unused since the reseller tier was
+    // removed — migration 090). Always null; kept for response stability.
     parent_company_id:   row.parent_company_id,
     parent_company_name: row.parent_company_name ?? null,
     parent_locked_at:    row.parent_locked_at,
@@ -123,9 +122,9 @@ function publicCompany(row) {
   };
 }
 
-/** Single source of truth for the workspace SELECT — joins the parent
- *  reseller so the response carries the human-readable name. Used by GET
- *  and as the follow-up after PATCH/POST mutations. */
+/** Single source of truth for the workspace SELECT. The parent join is
+ *  vestigial (parent_company_id is always null since the reseller tier was
+ *  removed). Used by GET and as the follow-up after PATCH mutations. */
 async function loadWorkspace(companyId) {
   const { rows } = await query(
     `SELECT c.id, c.name, c.company_type, c.status,
@@ -291,10 +290,9 @@ async function scheduleCancel(req, res, next) {
         `reason_code must be one of: ${[...ALLOWED_CANCELLATION_REASON_CODES].join(', ')}`);
     }
 
-    // Only end-users self-cancel. Resellers and the platform company use
-    // different flows.
+    // Only end-users self-cancel. The platform company uses a different flow.
     const { rows: companyRows } = await query(
-      `SELECT company_type, status, cancel_effective_at, parent_company_id
+      `SELECT company_type, status, cancel_effective_at
          FROM companies WHERE id = $1 AND deleted_at IS NULL`,
       [companyId]
     );
@@ -347,7 +345,6 @@ async function scheduleCancel(req, res, next) {
 
     void events.emit('company.subscription_cancelled', {
       company:  { id: companyId, type: 'end_user' },
-      reseller: row.parent_company_id ? { company_id: row.parent_company_id } : undefined,
       actor:    { user_id: req.user.user_id },
       cancellation: {
         reason_code:        reasonCode,
@@ -402,110 +399,7 @@ async function undoScheduledCancel(req, res, next) {
   }
 }
 
-// â”€â”€ GET /api/workspace/resellers â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
-// Public-within-the-app list of active resellers, for the end-user
-// attach flow's search-and-pick. Returns the minimum needed for a
-// picker: id + display name. No counts, no internal codes.
-async function listResellers(req, res, next) {
-  try {
-    const { rows } = await query(
-      `SELECT id, name
-         FROM companies
-        WHERE company_type = 'reseller'
-          AND status = 'active'
-          AND deleted_at IS NULL
-        ORDER BY name`
-    );
-    return res.json({ resellers: rows });
-  } catch (err) {
-    return next(err);
-  }
-}
-
-// â”€â”€ POST /api/workspace/attach-reseller â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
-// End-user-admin only. One-shot: links the caller's company to a
-// reseller by id, sets parent_locked_at, refuses if already linked.
-// Platform admins use a separate endpoint to override.
-async function attachReseller(req, res, next) {
-  try {
-    const companyId  = req.user.company_id;
-    const resellerId = Number(req.body?.reseller_id);
-
-    if (!Number.isFinite(resellerId) || resellerId <= 0) {
-      return badRequest(res, 'reseller_id is required');
-    }
-
-    // Caller must be an end_user. Resellers and the platform company can
-    // never have a parent.
-    const { rows: meRows } = await query(
-      `SELECT id, company_type, parent_company_id, name
-         FROM companies WHERE id = $1 AND deleted_at IS NULL`,
-      [companyId]
-    );
-    if (meRows.length === 0) {
-      return res.status(404).json({ error: 'Not Found', message: 'Workspace not found' });
-    }
-    const me = meRows[0];
-    if (me.company_type !== 'end_user') {
-      return res.status(403).json({
-        error: 'Forbidden',
-        message: 'Only end-user workspaces can attach to a reseller.',
-      });
-    }
-    if (me.parent_company_id) {
-      return res.status(409).json({
-        error: 'Conflict',
-        message: 'This workspace is already attached to a reseller. Contact support to change it.',
-      });
-    }
-
-    // Look up the reseller by id. Only active resellers can be attached
-    // to; suspended / canceled / deleted ones return the same "not
-    // found" so we don't leak existence.
-    const { rows: rRows } = await query(
-      `SELECT id, name FROM companies
-        WHERE id = $1
-          AND company_type = 'reseller'
-          AND status = 'active'
-          AND deleted_at IS NULL`,
-      [resellerId]
-    );
-    if (rRows.length === 0) {
-      return res.status(404).json({
-        error: 'Not Found',
-        message: 'That reseller is no longer available.',
-      });
-    }
-    const reseller = rRows[0];
-
-    await query(
-      `UPDATE companies
-          SET parent_company_id = $2,
-              parent_locked_at  = NOW(),
-              updated_at        = NOW()
-        WHERE id = $1`,
-      [companyId, reseller.id]
-    );
-
-    recordAudit(req, 'company.reseller_attached', {
-      target_type: 'company',
-      target_id:   companyId,
-      metadata:    {
-        reseller_id:   reseller.id,
-        reseller_name: reseller.name,
-        source:        'self_service',
-      },
-    });
-
-    const fresh = await loadWorkspace(companyId);
-    return res.json({ workspace: publicCompany(fresh) });
-  } catch (err) {
-    return next(err);
-  }
-}
-
 module.exports = {
   get, update,
   scheduleCancel, undoScheduledCancel,
-  attachReseller, listResellers,
 };

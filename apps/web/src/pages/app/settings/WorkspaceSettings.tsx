@@ -27,7 +27,6 @@ import {
   type WorkspacePatch,
 } from '../../../services/tenancy/workspace';
 import CountryInput from '../../../components/forms/CountryInput';
-import { branding } from '../../../branding';
 
 // ── Drawer styling (collapsible <details>) ──────────────────────────────────
 
@@ -36,10 +35,6 @@ const Drawer = styled.details`
   border: 1px solid ${({ theme }) => theme.colors.border.light};
   border-radius: 10px;
   margin-bottom: 12px;
-  /* overflow stays visible so absolutely-positioned children like the
-     reseller-picker dropdown can extend past the drawer's bottom edge.
-     The summary's hover background is now rounded on its own corners
-     instead of relying on the parent clipping it. */
 
   & > summary {
     border-radius: 10px 10px 0 0;
@@ -429,16 +424,6 @@ export function WorkspaceSettings() {
   const [error, setError]         = useState<string | null>(null);
   const [success, setSuccess]     = useState(false);
 
-  // Reseller attach state — separate from the main form because it's a
-  // single-shot action, not a diffed PATCH. The list is fetched lazily
-  // (on drawer open) and filtered client-side; small enough not to need
-  // server-side search.
-  const [resellerList, setResellerList] = useState<{ id: number; name: string }[] | null>(null);
-  const [resellerQuery, setResellerQuery] = useState('');
-  const [pickedReseller, setPickedReseller] = useState<{ id: number; name: string } | null>(null);
-  const [attachBusy,   setAttachBusy]   = useState(false);
-  const [attachError,  setAttachError]  = useState<string | null>(null);
-
   useEffect(() => {
     (async () => {
       try {
@@ -480,39 +465,6 @@ export function WorkspaceSettings() {
   };
 
   const reset = () => { setForm(initial); setError(null); setSuccess(false); };
-
-  // Lazy-fetch the resellers list the first time it's needed.
-  const ensureResellerList = async () => {
-    if (resellerList !== null) return;
-    try {
-      const list = await workspaceApi.listResellers();
-      setResellerList(list);
-    } catch {
-      setResellerList([]);
-    }
-  };
-
-  const handleAttachReseller = async () => {
-    if (!pickedReseller) {
-      setAttachError('Pick a reseller from the list first.');
-      return;
-    }
-    setAttachBusy(true);
-    setAttachError(null);
-    try {
-      const updated = await workspaceApi.attachReseller(pickedReseller.id);
-      setWorkspace(updated);
-      const f = fromWorkspace(updated);
-      setForm(f);
-      setInitial(f);
-      setResellerQuery('');
-      setPickedReseller(null);
-    } catch (err) {
-      setAttachError(err instanceof Error ? err.message : 'Could not link to that reseller.');
-    } finally {
-      setAttachBusy(false);
-    }
-  };
 
   if (loading) return <div style={{ color: '#94a3b8' }}>Loading…</div>;
   if (!workspace) return <Banner $tone="error">Could not load your workspace.</Banner>;
@@ -787,81 +739,7 @@ export function WorkspaceSettings() {
         </DrawerBody>
       </Drawer>
 
-      {/* ── 5. Reseller (end-users only) ────────────────────────── */}
-      {workspace.company_type === 'end_user' && (
-        <Drawer onToggle={(e) => { if (e.currentTarget.open) ensureResellerList(); }}>
-          <DrawerSummary>
-            <span className="label">
-              <span className="title">Reseller</span>
-              {workspace.parent_company_name
-                ? <span className="summary">{workspace.parent_company_name}</span>
-                : <span className="summary empty">Direct customer — no reseller</span>}
-            </span>
-            <span className="right">
-              <IconChevronDown size={16} className="chevron" />
-            </span>
-          </DrawerSummary>
-          <DrawerBody>
-            {workspace.parent_company_id ? (
-              <>
-                <Row>
-                  <Label>Linked to</Label>
-                  <ReadOnly>
-                    <span className="pill">{workspace.parent_company_name}</span>
-                  </ReadOnly>
-                </Row>
-                <Row>
-                  <Label>Locked since</Label>
-                  <div style={{ fontSize: 13 }}>
-                    {workspace.parent_locked_at
-                      ? new Date(workspace.parent_locked_at).toLocaleDateString()
-                      : '—'}
-                  </div>
-                </Row>
-                <div style={{
-                  marginTop: 8, padding: '10px 12px',
-                  background: '#f1f5f9', border: '1px solid #e2e8f0',
-                  borderRadius: 8, fontSize: 12.5, lineHeight: 1.5, color: '#475569',
-                }}>
-                  Your reseller relationship is locked once it's set. If you
-                  need to change it, contact the {branding.productName} platform team.
-                </div>
-              </>
-            ) : (
-              <>
-                <p style={{ margin: 0, fontSize: 13, color: '#64748b' }}>
-                  Search for the reseller who set up your account and pick
-                  them from the list to link your workspace. This is a
-                  one-time action — once set, only the {branding.productName} platform
-                  team can change it.
-                </p>
-                {isAdmin ? (
-                  <ResellerPicker
-                    list={resellerList}
-                    query={resellerQuery}
-                    onQueryChange={(v) => { setResellerQuery(v); setPickedReseller(null); }}
-                    picked={pickedReseller}
-                    onPick={(r) => { setPickedReseller(r); setResellerQuery(r.name); }}
-                    onAttach={handleAttachReseller}
-                    busy={attachBusy}
-                  />
-                ) : (
-                  <div style={{ fontSize: 12, color: '#94a3b8' }}>
-                    Only workspace admins can link a reseller.
-                  </div>
-                )}
-                {attachError && (
-                  <Banner $tone="error" role="alert" style={{ margin: 0 }}>
-                    {attachError}
-                  </Banner>
-                )}
-              </>
-            )}
-          </DrawerBody>
-        </Drawer>
-      )}
-
-      {/* ── 6. Notifications ────────────────────────────────────── */}
+      {/* ── 5. Notifications ────────────────────────────────────── */}
       <Drawer>
         <DrawerSummary>
           <span className="label">
@@ -917,136 +795,5 @@ export function WorkspaceSettings() {
   );
 }
 
-// ── ResellerPicker ──────────────────────────────────────────────────────────
-
-const PickerWrap = styled.div`
-  position: relative;
-  width: 100%;
-  max-width: 480px;
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-`;
-
-const PickerInputRow = styled.div`
-  position: relative;
-`;
-
-const PickerList = styled.div`
-  position: absolute;
-  top: calc(100% + 4px);
-  left: 0;
-  /* Anchor to the input width but allow expansion so longer names
-     aren't truncated. */
-  min-width: 100%;
-  max-width: 100%;
-  max-height: 260px;
-  overflow-y: auto;
-  background: ${({ theme }) => theme.colors.background.primary};
-  border: 1px solid ${({ theme }) => theme.colors.border.light};
-  border-radius: 8px;
-  box-shadow: 0 8px 24px rgba(15, 23, 42, 0.12);
-  z-index: 20;
-`;
-
-const PickerOption = styled.button`
-  width: 100%;
-  text-align: left;
-  background: none;
-  border: none;
-  padding: 8px 12px;
-  font-size: 13px;
-  font-family: inherit;
-  cursor: pointer;
-  color: ${({ theme }) => theme.colors.text.primary};
-
-  & + & { border-top: 1px solid ${({ theme }) => theme.colors.border.light}; }
-  &:hover { background: ${({ theme }) => theme.colors.background.secondary}; }
-`;
-
-const PickerEmpty = styled.div`
-  padding: 10px 12px;
-  font-size: 12px;
-  color: ${({ theme }) => theme.colors.text.tertiary};
-`;
-
-const PickedHint = styled.div`
-  font-size: 12px;
-  color: ${({ theme }) => theme.colors.text.tertiary};
-
-  strong { color: ${({ theme }) => theme.colors.text.primary}; font-weight: 600; }
-`;
-
-interface ResellerPickerProps {
-  list:        { id: number; name: string }[] | null;
-  query:       string;
-  onQueryChange: (v: string) => void;
-  picked:      { id: number; name: string } | null;
-  onPick:      (r: { id: number; name: string }) => void;
-  onAttach:    () => void;
-  busy:        boolean;
-}
-
-function ResellerPicker({
-  list, query, onQueryChange, picked, onPick, onAttach, busy,
-}: ResellerPickerProps) {
-  const trimmed = query.trim().toLowerCase();
-  const showDropdown = !picked && trimmed.length > 0 && list !== null;
-  const matches = showDropdown && list
-    ? list.filter((r) => r.name.toLowerCase().includes(trimmed)).slice(0, 12)
-    : [];
-
-  return (
-    <PickerWrap>
-      <PickerInputRow>
-        <Input
-          placeholder="Search by reseller name…"
-          value={query}
-          onChange={(e) => onQueryChange(e.target.value)}
-          disabled={busy}
-          autoComplete="off"
-        />
-        {showDropdown && (
-          <PickerList role="listbox">
-            {list === null ? (
-              <PickerEmpty>Loading…</PickerEmpty>
-            ) : matches.length === 0 ? (
-              <PickerEmpty>No active resellers match “{query}”.</PickerEmpty>
-            ) : (
-              matches.map((r) => (
-                <PickerOption
-                  key={r.id}
-                  type="button"
-                  role="option"
-                  aria-selected={false}
-                  onClick={() => onPick(r)}
-                >
-                  {r.name}
-                </PickerOption>
-              ))
-            )}
-          </PickerList>
-        )}
-      </PickerInputRow>
-      {picked && (
-        <>
-          <PickedHint>
-            Linking to <strong>{picked.name}</strong>. This can't be undone
-            from your side once confirmed.
-          </PickedHint>
-          <div>
-            <PrimaryButton
-              type="button"
-              onClick={onAttach}
-              disabled={busy}
-            >
-              {busy ? 'Linking…' : `Link to ${picked.name}`}
-            </PrimaryButton>
-          </div>
-        </>
-      )}
-    </PickerWrap>
-  );
-}
 
 export default WorkspaceSettings;

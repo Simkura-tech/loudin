@@ -1,6 +1,6 @@
 # Loudin Application
 
-Multi-tenant access-control platform for managing IoT door locks via Simkura's REST API. Node.js/Express backend, React frontend, PostgreSQL, with hierarchical company types (platform / reseller / end-user).
+Multi-tenant access-control platform for managing IoT door locks via Simkura's REST API. Node.js/Express backend, React frontend, PostgreSQL, with two company types (platform / end-user).
 
 For deeper docs, the authoritative index is **[`docs/README.md`](./docs/README.md)**. This file is the quick-start orientation only.
 
@@ -26,40 +26,33 @@ cd apps/web && npm run dev
 
 ### Seeded development users
 
-The seed (`apps/api/database/seeds/seed.sql`) creates three Admins, one per company type:
+The seed (`apps/api/database/seeds/seed.sql`) creates one Admin per company:
 
 | Role / Context | Email | Company |
 |----------------|-------|---------|
 | Platform admin | `platform-admin@loudin.com` | Loudin Platform (`platform`) |
-| Reseller admin | `admin@acme-dist.example` | Acme Distribution (`reseller`) |
 | End-user company admin | `admin@democorp.example` | Demo Customer Co (`end_user`) |
+| Second end-user admin | `admin@brookline.example` | Brookline Coworking (`end_user`) |
 
 ---
 
 ## Role & Company Model
 
-Two user types. What kind of admin a user is (platform / reseller / end-user) is determined by their **company's** `company_type`, not by a separate user_type_id.
+Two user types. What kind of admin a user is (platform / end-user) is determined by their **company's** `company_type`, not by a separate user_type_id.
 
 | user_type_id | Name | Scope |
 |--------------|------|-------|
 | 1 | **Admin** | Company-scoped — UI / permissions depend on `company.company_type` |
 | 2 | **User** | Regular logged-in user (non-admin) |
 
-**Company types** (`companies.company_type`):
+**Company types** (`companies.company_type`) — there are exactly two:
 
-- `platform` — the platform operator. An Admin here is the "platform admin".
-- `reseller` — Partner companies that manage end-user companies on the platform. Their devices can be routed through a per-reseller Simkura account.
-- `end_user` — Customer companies that own and use the locks. Linked to their reseller via `parent_company_id`.
+- `platform` — the platform operator (a software provider/integrator, or a single company running its own doors). An Admin here is the "platform admin", who administers every end-user company directly.
+- `end_user` — Customer companies that own and use the locks.
+
+There is **no reseller tier** — it was removed in migration `090_remove_reseller_type.sql`. The `companies.parent_company_id` / `parent_locked_at` columns remain but are unused (always NULL), reserved for a possible future parent/child relationship.
 
 Door-access **credential holders** (people who just need a PIN or card to open a door, with no software login) live in the `people` table, not `users`.
-
----
-
-## Resellers
-
-A reseller is a `company_type='reseller'` row in `companies`. Resellers can hold their own Simkura API credentials (`simkura_api_key`, `simkura_api_url`) so their devices route through their own Simkura account rather than the platform's default. NULL credentials = falls back to platform env-var defaults.
-
-An end-user company gets "locked" to a reseller on first device provisioning. The link is `companies.parent_company_id` pointing to the reseller's row, with `parent_locked_at` recording when. Devices carry a `reseller_code` (reported by firmware) and a `reseller_company_id` (the reseller whose Simkura account the device came from) — these can differ from `company_id` (the end-user that ultimately owns the device).
 
 ---
 
@@ -130,8 +123,7 @@ DB_PASSWORD=...
 JWT_SECRET=...
 JWT_EXPIRE=24h
 
-# Simkura (platform-level defaults; resellers can override
-# via companies.simkura_api_key / simkura_api_url)
+# Simkura (platform-level credentials)
 SIMKURA_API_URL=https://api.simkura.com
 SIMKURA_API_KEY=...
 SIMKURA_WEBHOOK_SECRET=...
@@ -162,7 +154,7 @@ JOIN companies  c  ON c.id  = u.company_id
 ORDER BY c.company_type, u.id;
 ```
 
-A user's permission tier comes from BOTH `user_type_id` (Admin or User) AND the user's `company.company_type` (platform / reseller / end_user). The combination is what determines UI and access.
+A user's permission tier comes from BOTH `user_type_id` (Admin or User) AND the user's `company.company_type` (platform / end_user). The combination is what determines UI and access.
 
 ### Inspecting credentials and devices
 

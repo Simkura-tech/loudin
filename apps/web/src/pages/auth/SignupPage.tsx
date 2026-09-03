@@ -7,16 +7,14 @@
  */
 
 import { useEffect, useState } from 'react';
-import { Link, useNavigate, useSearchParams } from 'react-router-dom';
+import { Link, useNavigate } from 'react-router-dom';
 import styled from '@emotion/styled';
 import {
   IconArrowRight,
-  IconBuildingStore,
   IconMailOff,
   IconUserPlus,
 } from '@tabler/icons-react';
 import { useAuth } from '../../contexts/AuthContext';
-import { auth } from '../../services/auth/auth';
 import { fetchPublicConfig } from '../../services/config';
 import { branding } from '../../branding';
 
@@ -241,37 +239,6 @@ const ErrorBanner = styled.div`
   line-height: 1.45;
 `;
 
-const InviteBanner = styled.div`
-  display: flex;
-  align-items: flex-start;
-  gap: 10px;
-  padding: 12px 14px;
-  border-radius: 10px;
-  background: ${({ theme }) => theme.colors.brand.primary}0a;
-  border: 1px solid ${({ theme }) => theme.colors.brand.primary}40;
-  color: ${({ theme }) => theme.colors.text.primary};
-  font-size: 13px;
-  line-height: 1.5;
-  margin-bottom: 24px;
-
-  .icon {
-    color: ${({ theme }) => theme.colors.brand.primary};
-    flex-shrink: 0;
-    margin-top: 1px;
-  }
-`;
-
-const InviteWarnBanner = styled.div`
-  padding: 10px 12px;
-  border-radius: 8px;
-  background: #fffbeb;
-  border: 1px solid #fde68a;
-  color: #92400e;
-  font-size: 13px;
-  line-height: 1.45;
-  margin-bottom: 20px;
-`;
-
 const PageFooter = styled.footer`
   padding: 24px clamp(24px, 6vw, 96px);
   font-size: 13px;
@@ -287,17 +254,6 @@ export function SignupPage() {
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  // ── Reseller invite state ───────────────────────────────────────────────────
-  // A /signup?invite=<token> link means a reseller invited this customer.
-  // We resolve the token up front to show who the invite is from; the
-  // register call re-sends the token so the backend attaches the new
-  // company to the reseller at creation. A stale token degrades to a
-  // normal signup (with a notice) rather than blocking account creation.
-  const [searchParams] = useSearchParams();
-  const inviteToken = searchParams.get('invite');
-  const [inviteResellerName, setInviteResellerName] = useState<string | null>(null);
-  const [inviteInvalid, setInviteInvalid] = useState(false);
-
   // ── Instance signup toggle ──────────────────────────────────────────────────
   // Private ("own doors") deployments close open self-signup. null while the
   // config is loading; a fetch failure falls back to enabled (the backend
@@ -312,24 +268,9 @@ export function SignupPage() {
     return () => { cancelled = true; };
   }, []);
 
-  useEffect(() => {
-    if (!inviteToken) return;
-    let cancelled = false;
-    auth.verifyInvite(inviteToken)
-      .then((r) => { if (!cancelled) setInviteResellerName(r.reseller.name); })
-      .catch(() => { if (!cancelled) setInviteInvalid(true); });
-    return () => { cancelled = true; };
-  }, [inviteToken]);
-
-  const inviteActive   = inviteToken != null && inviteResellerName != null;
-  const inviteChecking = inviteToken != null && !inviteInvalid && inviteResellerName == null;
-
   const configChecking = signupsEnabled === null;
-  // A resolved reseller invite bypasses the toggle — the reseller vouched
-  // for this signup, so invited accounts can be created even on an
-  // invite-only instance (mirrors the backend's rule).
   const signupsClosed =
-    !configChecking && signupsEnabled === false && !inviteActive && !inviteChecking;
+    !configChecking && signupsEnabled === false;
 
   const handleSubmit = async (e: React.FormEvent<HTMLFormElement>) => {
     e.preventDefault();
@@ -345,7 +286,6 @@ export function SignupPage() {
         password:    String(data.get('password')  || ''),
         companyName: String(data.get('companyName') || ''),
         companyType: 'end_user',
-        invite_token: inviteActive ? inviteToken : undefined,
         // The form's `required` attribute on the checkbox guarantees this
         // is checked before submit reaches here.
         terms_accepted: true,
@@ -358,10 +298,9 @@ export function SignupPage() {
     }
   };
 
-  // While an invite token or the instance config is being resolved, hold
-  // the form so we don't flash it before swapping in the invite banner /
-  // invite-only notice.
-  const showForm = !inviteChecking && !configChecking;
+  // While the instance config is being resolved, hold the form so we don't
+  // flash it before swapping in the invite-only notice.
+  const showForm = !configChecking;
 
   return (
     <Page>
@@ -385,15 +324,8 @@ export function SignupPage() {
               <Heading>This instance is invite-only</Heading>
               <Sub>
                 Creating new accounts is switched off here. If you were
-                expecting access, ask your administrator to add you — or ask
-                your reseller for an invite link.
+                expecting access, ask your administrator to add you.
               </Sub>
-              {inviteInvalid && (
-                <InviteWarnBanner role="alert">
-                  Your invite link is no longer valid. Ask your reseller for a
-                  fresh one to create your account.
-                </InviteWarnBanner>
-              )}
               <CardFooter>
                 Already have an account? <Link to="/login">Sign in</Link>
               </CardFooter>
@@ -405,28 +337,6 @@ export function SignupPage() {
           </Crest>
           <Heading>Create your account</Heading>
           <Sub>Get up and running in under five minutes.</Sub>
-
-              {/* ── Reseller invite ─────────────────────────────────────────────
-                  An invited signup is always an end-user company connected to
-                  the inviting reseller, so the type toggle is replaced by the
-                  invite banner. A dead link falls back to the normal flow. */}
-              {inviteActive && (
-                <InviteBanner>
-                  <IconBuildingStore className="icon" size={16} strokeWidth={1.75} />
-                  <span>
-                    You&apos;ve been invited by <strong>{inviteResellerName}</strong>.
-                    Your new workspace will be connected to them automatically.
-                  </span>
-                </InviteBanner>
-              )}
-              {inviteInvalid && (
-                <InviteWarnBanner role="alert">
-                  This invite link is no longer valid. You can still create an
-                  account — ask your reseller for a fresh link to get connected,
-                  or attach to them later from your workspace settings.
-                </InviteWarnBanner>
-              )}
-              {inviteChecking && <Sub>Checking your invite…</Sub>}
 
               {showForm && (
                 <Form onSubmit={handleSubmit}>

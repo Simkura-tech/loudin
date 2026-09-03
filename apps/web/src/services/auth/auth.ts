@@ -8,11 +8,11 @@
 
 import api from '../api';
 
-export type CompanyType = 'platform' | 'end_user' | 'reseller';
+export type CompanyType = 'platform' | 'end_user';
 
-/** When the active session is a reseller acting "as" a customer, the
+/** When the active session is a platform admin acting "as" a customer, the
  *  /me response includes this block. Fields describe the actor's home
- *  tenant (the reseller), the impersonated workspace is the regular
+ *  tenant (the platform), the impersonated workspace is the regular
  *  company_* fields on AuthUser. */
 export interface ImpersonationState {
   impersonator_company_id:   number;
@@ -70,9 +70,6 @@ export interface RegisterPayload {
   companyName: string;
   /** Public self-signup creates end-user companies only. */
   companyType: 'end_user';
-  /** End-user signups arriving through a reseller invite link. Re-resolved
-   *  server-side; the new company is attached to the reseller at creation. */
-  invite_token?: string;
   /** Required for every signup — confirms the ToS + Privacy Policy were accepted. */
   terms_accepted: true;
 }
@@ -101,15 +98,6 @@ export const auth = {
   forgotPassword: (identifier: string, channel?: 'email' | 'sms') =>
     api.post<ForgotPasswordResult, ForgotPasswordResult>('/api/auth/forgot-password',
       { identifier, channel }),
-
-  /** Resolve a reseller invite token (from a /signup?invite=… link) so the
-   *  form can show who the invite is from. Throws (404) when the link has
-   *  been rotated or the reseller is no longer active. */
-  verifyInvite: (token: string) =>
-    api.get<
-      { ok: true; reseller: { name: string } },
-      { ok: true; reseller: { name: string } }
-    >(`/api/auth/invite/${encodeURIComponent(token)}`),
 
   resetPassword: (identifier: string, code: string, new_password: string) =>
     api.post<{ ok: boolean }, { ok: boolean }>('/api/auth/reset-password',

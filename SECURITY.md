@@ -20,7 +20,7 @@ Include what you can: affected endpoint or component, reproduction steps, and im
 
 Anything in this repository is in scope. The areas we consider most critical:
 
-- **Tenant isolation** — any way for one company (platform / reseller / end-user) to read or modify another company's data, devices, people, or credentials.
+- **Tenant isolation** — any way for one company (platform / end-user) to read or modify another company's data, devices, people, or credentials.
 - **Authentication and session handling** — login, tokens, signup and invite flows, privilege boundaries between admin tiers.
 - **Credential handling** — PIN codes and card credentials at rest, in transit, and in what gets pushed to devices; anything that leaks or forges a door credential.
 - **Device command paths** — unauthorized lock/unlock or configuration commands, webhook signature bypasses.

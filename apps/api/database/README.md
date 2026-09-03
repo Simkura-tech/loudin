@@ -48,8 +48,8 @@ instead.
 ## Current schema
 
 **Core entities**
-- `companies` — tenants (`platform` / `reseller` / `end_user`). Parent-company hierarchy for reseller ownership; per-reseller Simkura credential columns; cancellation scheduling.
-- `users` — software users with logins. Two roles: `Admin` (1) and `User` (2). What kind of admin (platform / reseller / end-user) is determined by their company's `company_type`.
+- `companies` — tenants (`platform` / `end_user`); cancellation scheduling.
+- `users` — software users with logins. Two roles: `Admin` (1) and `User` (2). What kind of admin (platform / end-user) is determined by their company's `company_type`.
 - `user_types` — lookup table for the two roles.
 - `people` — door-access credential holders. No software login.
 - `devices` — door lock hardware. Nullable `company_id` (unclaimed pool). Carries the Simkura hardware `device_id`, live state, firmware-reported counts, and the hardware profile (`manufacturer`, `hardware_version`, `num_doors`, `power_type`, `connectivity_transport`, `deployed`, plus the JSONB capability tiers `capabilities` / `features` / `supported` / `card_formats` that the UI gates features on — migration 085).

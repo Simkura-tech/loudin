@@ -11,7 +11,7 @@
  *
  * When req.impersonation is set (populated by the impersonation
  * middleware), actor_company_id stays as the impersonator's company
- * (the reseller), and on_behalf_of_company_id is the impersonated
+ * (the platform), and on_behalf_of_company_id is the impersonated
  * customer. When no impersonation is active, the two are equal.
  */
 
