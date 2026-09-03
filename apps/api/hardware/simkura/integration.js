@@ -30,6 +30,16 @@ module.exports = {
   fields: [
     { field: 'api_url', secret: false, env: ['SIMKURA_API_URL', 'SIMKURA_CORE_URL'],     label: 'API base URL' },
     { field: 'api_key', secret: true,  env: ['SIMKURA_API_KEY', 'SIMKURA_CORE_API_KEY'], label: 'API key' },
+    {
+      field: 'webhook_secret', secret: true, env: ['SIMKURA_WEBHOOK_SECRET'],
+      label: 'Webhook signing secret', placeholder: 'whsec_…',
+      help: 'HMAC secret for verifying inbound device events. scripts/register-webhook.js stores it here automatically when it registers or rotates the webhook.',
+    },
+    {
+      field: 'webhook_public_url', secret: false, env: ['SIMKURA_WEBHOOK_PUBLIC_URL'],
+      label: 'Webhook public URL', placeholder: 'https://api.example.com/api/webhooks/simkura',
+      help: 'The publicly reachable URL Simkura POSTs device events to — used by scripts/register-webhook.js when registering the receiver.',
+    },
   ],
 
   /** Cheap, synchronous. Extra string values are shown as pills in the admin UI. */

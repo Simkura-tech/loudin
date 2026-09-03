@@ -41,6 +41,11 @@ module.exports = {
       label: 'From address',
       help: 'Sender address — must be on a domain verified in Resend.',
     },
+    {
+      field: 'ops_alert_email', secret: false, env: ['OPS_ALERT_EMAIL'],
+      label: 'Ops alert email',
+      help: 'Destination for operational alerts (webhook failures, background job errors). Alerts are dropped with a log line when unset.',
+    },
   ],
 
   status() {

@@ -144,7 +144,8 @@ async function sendCode({ channel, destination, code, purpose }) {
 }
 
 /**
- * Send a generic ops alert to the env-configured OPS_ALERT_EMAIL.
+ * Send a generic ops alert to the configured ops address (resend card's
+ * "Ops alert email" on the Integrations tab; OPS_ALERT_EMAIL env fallback).
  * Used for events the Loudin team should see in their inbox (failed
  * dealer-code attempts, CRM connectivity loss, etc.).
  *
@@ -153,7 +154,7 @@ async function sendCode({ channel, destination, code, purpose }) {
  * fail the user-facing flow they're attached to.
  */
 async function sendOpsAlert({ subject, body }) {
-  const to = process.env.OPS_ALERT_EMAIL;
+  const to = settings.get('resend', 'ops_alert_email');
   if (!to) {
     console.warn('[notifier] sendOpsAlert: OPS_ALERT_EMAIL not set — alert dropped.');
     return { delivered: 'console', error: 'OPS_ALERT_EMAIL not configured' };

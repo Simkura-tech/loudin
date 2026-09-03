@@ -24,6 +24,7 @@ const integrations = [
   require('../../hardware/simkura/integration'),
   require('../../integrations/resend/integration'),
   require('../../integrations/twilio/integration'),
+  require('../../integrations/google/integration'),
 ];
 
 // ── descriptor validation — fail fast at boot, not on first request ─────────

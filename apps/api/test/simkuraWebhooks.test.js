@@ -123,6 +123,27 @@ describe('Simkura webhooks — receiver', () => {
     assert.equal(rows[0].n, 1, 'v1 delivery and v2 retry of the same event store once');
   });
 
+  test('webhook secret override from platform settings wins over env, and reverts on clear', async () => {
+    const settings = require('../services/platform/integrationSettings');
+    await settings.init();
+    const dbSecret = 'db-override-secret';
+    const signWith = (secret, body) => crypto.createHmac('sha256', secret).update(body).digest('hex');
+    const post = (body, sig) => request(app).post('/api/webhooks/simkura')
+      .set('Content-Type', 'application/json')
+      .set('X-Webhook-Signature', sig).send(body);
+    try {
+      await settings.set('simkura', { webhook_secret: dbSecret });
+
+      const body = JSON.stringify({ event_type: 'device.wake', event_id: eid(), device_id: hwId });
+      assert.equal((await post(body, signWith(dbSecret, body))).status, 200, 'DB-override secret verifies');
+      assert.equal((await post(body, signWith(SECRET, body))).status, 401, 'env secret no longer verifies while overridden');
+    } finally {
+      await settings.set('simkura', { webhook_secret: '' }); // clear → revert to env
+    }
+    const body2 = JSON.stringify({ event_type: 'device.wake', event_id: eid(), device_id: hwId });
+    assert.equal((await post(body2, signWith(SECRET, body2))).status, 200, 'env secret works again after clearing the override');
+  });
+
   test('invalid JSON → 400; missing event_type → 400', async () => {
     const bad = 'not-json{';
     const r1 = await request(app).post('/api/webhooks/simkura')

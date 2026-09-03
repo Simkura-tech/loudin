@@ -9,11 +9,13 @@
  * To rotate the HMAC secret on an existing webhook:
  *   node scripts/register-webhook.js --regenerate
  *
- * Required env (apps/api/.env):
+ * Configuration (each resolves platform-settings override → env var):
  *   SIMKURA_API_URL              base URL, e.g. https://api.simkura.com
  *   SIMKURA_API_KEY              bearer token
  *   SIMKURA_WEBHOOK_PUBLIC_URL   the URL Simkura will POST to,
  *                                e.g. https://api.example.com/api/webhooks/simkura
+ *                                (also settable as "Webhook public URL" on the
+ *                                platform-admin Integrations tab)
  *
  * What it does:
  *   1. Looks for an existing Simkura webhook pointing at our URL.
@@ -24,17 +26,18 @@
  *      An existing webhook still on payload_version 'v1' is flipped to
  *      'v2' (safe mid-flight: the receiver accepts both shapes/schemes,
  *      and Simkura signs retries by the shape they were enqueued with).
- *   3. Stores the Simkura webhook id in platform_config(simkura_webhook_id).
- *   4. Prints the secret. SIMKURA_WEBHOOK_SECRET in .env must match it
- *      for the receiver to verify signatures.
+ *   3. Stores the Simkura webhook id in platform_config(simkura_webhook_id),
+ *      and — on create/rotate — stores the signing secret in the platform
+ *      integration settings ("Webhook signing secret" on the Integrations
+ *      tab), where the receiver picks it up immediately. Setting
+ *      SIMKURA_WEBHOOK_SECRET in .env still works as the fallback.
  */
 
 require('dotenv').config({ path: require('path').join(__dirname, '../.env') });
 
 const { client } = require('../hardware/simkura');
 const { query, pool } = require('../database/db');
-
-const PUBLIC_URL = process.env.SIMKURA_WEBHOOK_PUBLIC_URL;
+const settings = require('../services/platform/integrationSettings');
 const args = process.argv.slice(2);
 const regenerate = args.includes('--regenerate');
 
@@ -55,16 +58,20 @@ function printSecret(webhook) {
   console.log(`URL        : ${webhook.url}`);
   console.log(`Secret     : ${webhook.secret}`);
   console.log('────────────────────────────────────────────────────────────');
-  console.log('Set SIMKURA_WEBHOOK_SECRET in apps/api/.env (and prod secrets)');
-  console.log('to the secret above, then restart the api. The receiver will');
-  console.log('reject every signed delivery until the secrets match.');
+  console.log('The secret has been stored in the platform integration settings');
+  console.log('(API access → Integrations → Simkura) — the receiver uses it');
+  console.log('immediately, no restart needed. Optionally also set');
+  console.log('SIMKURA_WEBHOOK_SECRET in apps/api/.env as an env fallback.');
   console.log('');
 }
 
 (async () => {
   try {
+    await settings.init();
+    const PUBLIC_URL = settings.get('simkura', 'webhook_public_url');
     if (!PUBLIC_URL) {
-      console.error('SIMKURA_WEBHOOK_PUBLIC_URL is required (the URL Simkura will POST to).');
+      console.error('Webhook public URL is required (the URL Simkura will POST to).');
+      console.error('Set it on the Integrations tab or as SIMKURA_WEBHOOK_PUBLIC_URL in .env.');
       process.exit(1);
     }
     if (!client.isAvailable()) {
@@ -102,8 +109,9 @@ function printSecret(webhook) {
       await setConfig('simkura_webhook_id', String(existing.id));
       console.log('Stored simkura_webhook_id in platform_config.');
       console.log('');
-      console.log('NOTE: the secret is only shown when first created. If');
-      console.log('SIMKURA_WEBHOOK_SECRET in .env is missing, rerun with --regenerate.');
+      console.log('NOTE: the secret is only shown when first created. If no');
+      console.log('secret is configured (Integrations tab or SIMKURA_WEBHOOK_SECRET),');
+      console.log('rerun with --regenerate.');
       return;
     }
 
@@ -139,6 +147,10 @@ function printSecret(webhook) {
 
     await setConfig('simkura_webhook_id', String(webhook.id));
     console.log('Stored simkura_webhook_id in platform_config.');
+
+    // Persist the signing secret where the receiver resolves it (platform
+    // integration settings) so verification works from this moment.
+    await settings.set('simkura', { webhook_secret: webhook.secret });
     printSecret(webhook);
   } finally {
     await pool.end();

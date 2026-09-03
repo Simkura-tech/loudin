@@ -38,7 +38,8 @@ project README for how to get real hardware and production API access.
 
 ## Configuration — platform Integrations UI
 
-The Simkura connection settings (URL, API key) resolve through
+The Simkura connection settings (URL, API key, inbound-webhook signing
+secret and public URL) resolve through
 `services/platform/integrationSettings.js`: a `platform_config` row saved
 from the platform-admin **API access → Integrations** tab wins, env vars
 are the fallback. Clearing a field in the UI reverts to env. Timeouts and

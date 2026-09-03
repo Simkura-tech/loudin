@@ -30,12 +30,26 @@ const commandAck = require('../services/access/commandAck');
 
 const router = express.Router();
 
-const SECRET = process.env.SIMKURA_WEBHOOK_SECRET;
+const settings = require('../services/platform/integrationSettings');
 
-if (!SECRET && process.env.NODE_ENV === 'production') {
-  // Don't crash dev where it isn't set, but yell loudly so it can't be
-  // overlooked when this ships.
-  console.error('FATAL: SIMKURA_WEBHOOK_SECRET is not set in production. The /api/webhooks/simkura receiver will reject every request.');
+/**
+ * The signing secret resolves per request through the platform integration
+ * settings (Integrations tab override → SIMKURA_WEBHOOK_SECRET env → null),
+ * so a secret saved from the admin UI — or stored by register-webhook.js —
+ * takes effect immediately, no restart.
+ */
+function webhookSecret() {
+  return settings.get('simkura', 'webhook_secret');
+}
+
+let warnedMissingSecret = false;
+function warnMissingSecretOnce() {
+  if (warnedMissingSecret) return;
+  warnedMissingSecret = true;
+  console.error(
+    '[webhooks/simkura] No webhook secret configured (Integrations tab or ' +
+    'SIMKURA_WEBHOOK_SECRET) — every delivery is being rejected with 401.'
+  );
 }
 
 // Max |now − t| for the v2 timestamp-bound signature (replay window).
@@ -61,18 +75,22 @@ function timingSafeEq(a, b) {
  * Returns false rather than throwing on any malformed input.
  */
 function verifySignature(rawBuffer, signatureHeader) {
-  if (!SECRET) return false;
+  const secret = webhookSecret();
+  if (!secret) {
+    warnMissingSecretOnce();
+    return false;
+  }
   if (!signatureHeader || typeof signatureHeader !== 'string') return false;
   try {
     const v2 = /^t=(\d+),v2=([0-9a-f]{64})$/.exec(signatureHeader);
     if (v2) {
       const t = parseInt(v2[1], 10);
       if (Math.abs(Math.floor(Date.now() / 1000) - t) > V2_TOLERANCE_S) return false;
-      const expected = crypto.createHmac('sha256', SECRET)
+      const expected = crypto.createHmac('sha256', secret)
         .update(`${t}.`).update(rawBuffer).digest('hex');
       return timingSafeEq(v2[2], expected);
     }
-    const expectedHex = crypto.createHmac('sha256', SECRET).update(rawBuffer).digest('hex');
+    const expectedHex = crypto.createHmac('sha256', secret).update(rawBuffer).digest('hex');
     return timingSafeEq(signatureHeader, expectedHex);
   } catch {
     return false;

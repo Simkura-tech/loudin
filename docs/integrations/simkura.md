@@ -113,11 +113,14 @@ Synthetic test events (fired from the Simkura dashboard, marked
 `isTest: true`) are stored for the feed but never mutate device state.
 
 **Registering the receiver**: `node apps/api/scripts/register-webhook.js`
-(idempotent; needs `SIMKURA_WEBHOOK_PUBLIC_URL`; `--regenerate` rotates the
-secret). Creates with `payload_version: "v2"`, and flips a pre-v2
-registration to v2 on re-run — safe mid-flight, since the receiver accepts
-both shapes. The secret is returned **once** at creation — put it in
-`SIMKURA_WEBHOOK_SECRET`.
+(idempotent; needs the webhook public URL — set it on the Integrations tab
+or as `SIMKURA_WEBHOOK_PUBLIC_URL`; `--regenerate` rotates the secret).
+Creates with `payload_version: "v2"`, and flips a pre-v2 registration to v2
+on re-run — safe mid-flight, since the receiver accepts both shapes. The
+script stores the signing secret in the platform integration settings
+("Webhook signing secret" on the Integrations tab), where the receiver
+resolves it per request — `SIMKURA_WEBHOOK_SECRET` remains the env
+fallback for env-only deployments.
 
 ## Background sync workers
 

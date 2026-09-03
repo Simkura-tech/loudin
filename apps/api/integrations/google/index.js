@@ -6,38 +6,46 @@
  * Thin wrapper around google-auth-library's OAuth2Client.
  * Handles auth URL generation and code-to-token exchange.
  *
- * Env vars:
- *   GOOGLE_CLIENT_ID      — OAuth client id from Google Cloud Console
- *   GOOGLE_CLIENT_SECRET  — OAuth client secret
- *   GOOGLE_REDIRECT_URI   — Must exactly match a URI registered in Google Cloud Console
- *                           e.g. https://api.example.com/api/auth/google/callback
- *                           Defaults to http://localhost:3000/api/auth/google/callback for dev.
+ * Configuration resolves through the platform integration settings
+ * (services/platform/integrationSettings.js) on EVERY use — a value saved
+ * on the admin "API access → Integrations" tab (google card) wins, env
+ * vars are the fallback:
+ *   client_id     / GOOGLE_CLIENT_ID
+ *   client_secret / GOOGLE_CLIENT_SECRET
+ *   redirect_uri  / GOOGLE_REDIRECT_URI — must exactly match a URI
+ *                   registered in Google Cloud Console; defaults to
+ *                   http://localhost:3000/api/auth/google/callback for dev.
  */
 
 const { OAuth2Client } = require('google-auth-library');
+const settings = require('../../services/platform/integrationSettings');
 
 const SCOPES = ['openid', 'email', 'profile'];
 
+// The .env.example placeholders count as "not configured" (mirrors integration.js).
+const PLACEHOLDERS = new Set(['your_google_client_id', 'your_google_client_secret']);
+
+function value(field) {
+  const v = settings.get('google', field);
+  return v && !PLACEHOLDERS.has(v) ? v : null;
+}
+
+function clientId() { return value('client_id'); }
+function clientSecret() { return value('client_secret'); }
+
 function redirectUri() {
-  return (
-    process.env.GOOGLE_REDIRECT_URI ||
-    'http://localhost:3000/api/auth/google/callback'
-  );
+  return value('redirect_uri') || 'http://localhost:3000/api/auth/google/callback';
 }
 
 function isConfigured() {
-  return !!(process.env.GOOGLE_CLIENT_ID && process.env.GOOGLE_CLIENT_SECRET);
+  return !!(clientId() && clientSecret());
 }
 
 function getClient() {
   if (!isConfigured()) {
-    throw new Error('Google OAuth is not configured — set GOOGLE_CLIENT_ID and GOOGLE_CLIENT_SECRET');
+    throw new Error('Google OAuth is not configured — set the client id/secret on the Integrations tab or via GOOGLE_CLIENT_ID / GOOGLE_CLIENT_SECRET');
   }
-  return new OAuth2Client(
-    process.env.GOOGLE_CLIENT_ID,
-    process.env.GOOGLE_CLIENT_SECRET,
-    redirectUri(),
-  );
+  return new OAuth2Client(clientId(), clientSecret(), redirectUri());
 }
 
 /**
@@ -73,7 +81,7 @@ async function exchangeCode(code) {
 
   const ticket = await client.verifyIdToken({
     idToken:  tokens.id_token,
-    audience: process.env.GOOGLE_CLIENT_ID,
+    audience: clientId(),
   });
 
   const p = ticket.getPayload();
