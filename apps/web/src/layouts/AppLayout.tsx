@@ -14,12 +14,10 @@ import {
   IconUsers,
   IconUsersGroup,
   IconBuilding,
-  IconFileText,
   IconKey,
   IconPlugConnected,
   IconLock,
   IconSettings,
-  IconTestPipe,
   IconLogout,
   IconChevronDown,
 } from '@tabler/icons-react';
@@ -498,14 +496,6 @@ export function AppLayout() {
               <NavItem to="/app/devices">
                 <IconLock size={18} strokeWidth={1.75} />
                 Devices
-              </NavItem>
-              <NavItem to="/app/platform/device-testing">
-                <IconTestPipe size={18} strokeWidth={1.75} />
-                Device Testing
-              </NavItem>
-              <NavItem to="/app/platform/documents">
-                <IconFileText size={18} strokeWidth={1.75} />
-                Documents
               </NavItem>
 
               {/* The platform company can run its own doors (docs/

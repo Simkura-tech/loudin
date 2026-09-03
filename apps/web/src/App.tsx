@@ -34,8 +34,6 @@ import WorkspaceSettings from './pages/app/settings/WorkspaceSettings';
 import ProfileSettings from './pages/app/settings/ProfileSettings';
 import SecuritySettings from './pages/app/settings/SecuritySettings';
 import PlatformApiKeysPage from './pages/app/PlatformApiKeysPage';
-import PlatformDocumentsPage from './pages/app/PlatformDocumentsPage';
-import DeviceTestingPage from './pages/app/platform/DeviceTestingPage';
 import IntegrationsPage from './pages/app/platform/IntegrationsPage';
 import IntegrationDetailPage from './pages/app/platform/IntegrationDetailPage';
 import TermsPage from './pages/legal/TermsPage';
@@ -85,8 +83,6 @@ function App() {
               <Route path="platform/api-keys" element={<PlatformApiKeysPage />} />
               <Route path="platform/integrations" element={<IntegrationsPage />} />
               <Route path="platform/integrations/:name" element={<IntegrationDetailPage />} />
-              <Route path="platform/documents" element={<PlatformDocumentsPage />} />
-              <Route path="platform/device-testing" element={<DeviceTestingPage />} />
               <Route path="settings" element={<SettingsLayout />}>
                 <Route index element={<Navigate to="workspace" replace />} />
                 <Route path="workspace" element={<WorkspaceSettings />} />

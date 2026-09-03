@@ -15,7 +15,6 @@ const platformDevices = require('../../controllers/platform/platformDevices');
 const platformApiKeys = require('../../controllers/platform/platformApiKeys');
 const platformWebhooks = require('../../controllers/platform/platformWebhooks');
 const platformIntegrations = require('../../controllers/platform/platformIntegrations');
-const documents = require('../../controllers/support/documents');
 
 const router = express.Router();
 
@@ -45,11 +44,5 @@ router.get   ('/webhooks/:id/deliveries',           platformWebhooks.listDeliver
 router.post  ('/webhooks/:id/rotate-secret',        platformWebhooks.rotateSecret);
 router.patch ('/webhooks/:id',                      platformWebhooks.update);
 router.delete('/webhooks/:id',                      platformWebhooks.remove);
-
-// Support documents (spec sheets, guides, manuals). Create is multipart.
-router.get   ('/documents',     documents.adminList);
-router.post  ('/documents',     documents.uploadMiddleware, documents.create);
-router.patch ('/documents/:id', documents.update);
-router.delete('/documents/:id', documents.remove);
 
 module.exports = router;

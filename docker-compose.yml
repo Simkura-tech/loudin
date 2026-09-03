@@ -63,8 +63,6 @@ services:
       # Other optional integrations (Resend email, Twilio SMS, Google OAuth)
       # are unset on purpose — the app runs without them.
       # See "Optional services & degraded features" in README.md.
-    volumes:
-      - api_uploads:/app/uploads
     # The browser reaches the API through the web container's nginx proxy.
     # Publish 3000 only if you want to curl the API directly:
     # ports:
@@ -79,4 +77,3 @@ services:
 
 volumes:
   pgdata:
-  api_uploads:

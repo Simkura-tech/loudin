@@ -1,9 +1,13 @@
 /**
  * OverviewPage — landing page after login.
  *
- * Pulls people and device counts from their respective list endpoints
- * (with limit=1 so the response is cheap), plus the company-wide recent
- * activity feed (GET /api/devices/events).
+ * Two shapes by role:
+ *   - Platform admin: platform-scoped — customer companies and the device
+ *     fleet (claimed / unclaimed), with quick actions into the platform
+ *     surfaces (Directory, Devices, Integrations).
+ *   - Company admin / user: their own company — people and device counts,
+ *     with quick actions to add a person / view devices.
+ * Both share the recent-activity feed (GET /api/devices/events).
  */
 
 import { useEffect, useState } from 'react';
@@ -11,14 +15,18 @@ import { Link } from 'react-router-dom';
 import styled from '@emotion/styled';
 import {
   IconArrowRight,
+  IconBuilding,
   IconLock,
+  IconPlugConnected,
   IconUserPlus,
   IconUsers,
 } from '@tabler/icons-react';
 import { useAuth } from '../../contexts/AuthContext';
 import { peopleApi } from '../../services/access/people';
+import { companiesApi } from '../../services/platform/companies';
 import {
   devicesApi,
+  platformDevicesApi,
   type CompanyEvent,
   type EventSeverity,
 } from '../../services/access/devices';
@@ -81,6 +89,12 @@ const StatCard = styled.div`
     height: 26px;
     background: ${({ theme }) => theme.colors.background.secondary};
     border-radius: 6px;
+    margin-top: 6px;
+  }
+  .sub {
+    display: block;
+    font-size: 12px;
+    color: ${({ theme }) => theme.colors.text.tertiary};
     margin-top: 6px;
   }
 `;
@@ -244,24 +258,44 @@ const EmptyState = styled.div`
 
 export function OverviewPage() {
   const { user } = useAuth();
+  const isPlatformAdmin = user?.user_type_id === 1 && user?.company_type === 'platform';
+
   const [peopleCount, setPeopleCount]   = useState<number | null>(null);
   const [devicesCount, setDevicesCount] = useState<number | null>(null);
+  const [companiesCount, setCompaniesCount] = useState<number | null>(null);
+  const [fleet, setFleet] = useState<{ total: number; claimed: number; unclaimed: number } | null>(null);
   const [recentEvents, setRecentEvents] = useState<CompanyEvent[] | null>(null);
 
   useEffect(() => {
-    (async () => {
-      try {
-        const [p, d] = await Promise.all([
-          peopleApi.list({ limit: 1 }),
-          devicesApi.list({ limit: 1 }),
-        ]);
-        setPeopleCount(p.total);
-        setDevicesCount(d.total);
-      } catch {
-        setPeopleCount(0);
-        setDevicesCount(0);
-      }
-    })();
+    if (isPlatformAdmin) {
+      (async () => {
+        try {
+          const [c, f] = await Promise.all([
+            companiesApi.list({ limit: 1 }),
+            platformDevicesApi.list(),
+          ]);
+          setCompaniesCount(c.total);
+          setFleet({ total: f.total, claimed: f.claimed_count, unclaimed: f.unclaimed_count });
+        } catch {
+          setCompaniesCount(0);
+          setFleet({ total: 0, claimed: 0, unclaimed: 0 });
+        }
+      })();
+    } else {
+      (async () => {
+        try {
+          const [p, d] = await Promise.all([
+            peopleApi.list({ limit: 1 }),
+            devicesApi.list({ limit: 1 }),
+          ]);
+          setPeopleCount(p.total);
+          setDevicesCount(d.total);
+        } catch {
+          setPeopleCount(0);
+          setDevicesCount(0);
+        }
+      })();
+    }
     (async () => {
       try {
         const r = await devicesApi.recentEvents({ limit: ACTIVITY_LIMIT });
@@ -270,7 +304,7 @@ export function OverviewPage() {
         setRecentEvents([]);
       }
     })();
-  }, []);
+  }, [isPlatformAdmin]);
 
   if (!user) return null;
 
@@ -278,49 +312,104 @@ export function OverviewPage() {
     <>
       <PageHeader>
         <h1>Welcome back, {user.first_name}.</h1>
-        <p>Here&apos;s what&apos;s happening at {user.company_name}.</p>
+        <p>
+          {isPlatformAdmin
+            ? `Platform overview for ${user.company_name}.`
+            : `Here's what's happening at ${user.company_name}.`}
+        </p>
       </PageHeader>
 
-      <StatGrid>
-        <StatCard>
-          <span className="label"><IconUsers size={14} /> People</span>
-          {peopleCount === null ? (
-            <span className="skeleton" />
-          ) : (
-            <div className="value">{peopleCount}</div>
-          )}
-        </StatCard>
-        <StatCard>
-          <span className="label"><IconLock size={14} /> Devices</span>
-          {devicesCount === null ? (
-            <span className="skeleton" />
-          ) : (
-            <div className="value">{devicesCount}</div>
-          )}
-        </StatCard>
-      </StatGrid>
+      {isPlatformAdmin ? (
+        <>
+          <StatGrid>
+            <StatCard>
+              <span className="label"><IconBuilding size={14} /> Companies</span>
+              {companiesCount === null
+                ? <span className="skeleton" />
+                : <div className="value">{companiesCount}</div>}
+              <span className="sub">Tenants on the platform, including your own.</span>
+            </StatCard>
+            <StatCard>
+              <span className="label"><IconLock size={14} /> Fleet devices</span>
+              {fleet === null
+                ? <span className="skeleton" />
+                : <div className="value">{fleet.total}</div>}
+              {fleet !== null && (
+                <span className="sub">{fleet.claimed} claimed · {fleet.unclaimed} unclaimed</span>
+              )}
+            </StatCard>
+          </StatGrid>
 
-      <Section>
-        <SectionTitle>Quick actions</SectionTitle>
-        <QuickGrid>
-          <QuickLink to="/app/people">
-            <span className="icon"><IconUserPlus size={20} strokeWidth={1.75} /></span>
-            <span className="body">
-              <div className="title">Add a person</div>
-              <div className="sub">Create a credential holder for door access.</div>
-            </span>
-            <IconArrowRight size={18} className="arrow" />
-          </QuickLink>
-          <QuickLink to="/app/devices">
-            <span className="icon"><IconLock size={20} strokeWidth={1.75} /></span>
-            <span className="body">
-              <div className="title">View devices</div>
-              <div className="sub">Status and battery for every lock.</div>
-            </span>
-            <IconArrowRight size={18} className="arrow" />
-          </QuickLink>
-        </QuickGrid>
-      </Section>
+          <Section>
+            <SectionTitle>Quick actions</SectionTitle>
+            <QuickGrid>
+              <QuickLink to="/app/companies">
+                <span className="icon"><IconBuilding size={20} strokeWidth={1.75} /></span>
+                <span className="body">
+                  <div className="title">Directory</div>
+                  <div className="sub">Companies on the platform and their admins.</div>
+                </span>
+                <IconArrowRight size={18} className="arrow" />
+              </QuickLink>
+              <QuickLink to="/app/devices">
+                <span className="icon"><IconLock size={20} strokeWidth={1.75} /></span>
+                <span className="body">
+                  <div className="title">Devices</div>
+                  <div className="sub">Claim, assign, and monitor the fleet.</div>
+                </span>
+                <IconArrowRight size={18} className="arrow" />
+              </QuickLink>
+              <QuickLink to="/app/platform/integrations">
+                <span className="icon"><IconPlugConnected size={20} strokeWidth={1.75} /></span>
+                <span className="body">
+                  <div className="title">Integrations</div>
+                  <div className="sub">Devices, email, SMS, and sign-in credentials.</div>
+                </span>
+                <IconArrowRight size={18} className="arrow" />
+              </QuickLink>
+            </QuickGrid>
+          </Section>
+        </>
+      ) : (
+        <>
+          <StatGrid>
+            <StatCard>
+              <span className="label"><IconUsers size={14} /> People</span>
+              {peopleCount === null
+                ? <span className="skeleton" />
+                : <div className="value">{peopleCount}</div>}
+            </StatCard>
+            <StatCard>
+              <span className="label"><IconLock size={14} /> Devices</span>
+              {devicesCount === null
+                ? <span className="skeleton" />
+                : <div className="value">{devicesCount}</div>}
+            </StatCard>
+          </StatGrid>
+
+          <Section>
+            <SectionTitle>Quick actions</SectionTitle>
+            <QuickGrid>
+              <QuickLink to="/app/people">
+                <span className="icon"><IconUserPlus size={20} strokeWidth={1.75} /></span>
+                <span className="body">
+                  <div className="title">Add a person</div>
+                  <div className="sub">Create a credential holder for door access.</div>
+                </span>
+                <IconArrowRight size={18} className="arrow" />
+              </QuickLink>
+              <QuickLink to="/app/devices">
+                <span className="icon"><IconLock size={20} strokeWidth={1.75} /></span>
+                <span className="body">
+                  <div className="title">View devices</div>
+                  <div className="sub">Status and battery for every lock.</div>
+                </span>
+                <IconArrowRight size={18} className="arrow" />
+              </QuickLink>
+            </QuickGrid>
+          </Section>
+        </>
+      )}
 
       <Section>
         <SectionTitle>Recent activity</SectionTitle>

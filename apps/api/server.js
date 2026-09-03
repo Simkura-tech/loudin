@@ -15,7 +15,6 @@ const helmet       = require('helmet');
 const morgan       = require('morgan');
 const cookieParser = require('cookie-parser');
 const http         = require('http');
-const path         = require('path');
 
 const app    = express();
 const server = http.createServer(app);   // wrapped for Socket.io
@@ -130,21 +129,7 @@ app.use('/api/people',        require('./routes/client/people'));
 app.use('/api/people-groups', require('./routes/client/peopleGroups'));
 app.use('/api/credentials',   require('./routes/client/credentials'));
 app.use('/api/devices',       require('./routes/client/devices'));
-app.use('/api/documents',     require('./routes/client/documents'));
 app.use('/api/reseller',      require('./routes/client/reseller'));
-
-// ── Uploaded media (/uploads/*) — support documents, served from local disk ──
-// CORP is forced to cross-origin because helmet's default (same-origin) would
-// otherwise block the admin UI (a different origin) from loading these.
-// Filenames are random + content-hashed, so long-lived caching is safe.
-app.use('/uploads', express.static(path.join(__dirname, 'uploads'), {
-  index: false,
-  dotfiles: 'ignore',
-  maxAge: '30d',
-  setHeaders: (res) => {
-    res.setHeader('Cross-Origin-Resource-Policy', 'cross-origin');
-  },
-}));
 
 // ── Internal routes (/internal/*) — platform-admin only, firewallable ────
 app.use('/internal/platform',  require('./routes/internal/platform'));

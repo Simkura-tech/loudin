@@ -46,6 +46,18 @@ doors**. See [docs/deployment-shapes.md](./docs/deployment-shapes.md) for
 what to configure for each and how an own-doors install grows into a
 service provider.
 
+**If you're a software provider or integrator:** run Loudin as a hosted
+product — add tailored panels to each customer's system, manage all your
+customers from one place, and build custom integrations against the same
+API your own UI uses. Want help setting it up? Reach out at
+[Jack@simkura.com](mailto:Jack@simkura.com).
+
+**If you're a single company:** use Loudin to manage your own access.
+Provisioning is done from the **platform admin** login; the day-to-day
+management happens as a **company admin**. The multi-tenant structure is
+mild overkill for one company, but it stays easy to navigate — and you can
+still build a custom integration on top.
+
 ## White-labeling
 
 The frontend is built to ship under your brand: one typed config file
