@@ -37,7 +37,6 @@ import {
   type EndpointStatus,
 } from './apiCatalog';
 import PlatformWebhooksPanel from './PlatformWebhooksPanel';
-import PlatformIntegrationsPanel from './PlatformIntegrationsPanel';
 import { branding } from '../../branding';
 
 // ── Layout ───────────────────────────────────────────────────────────────────
@@ -806,7 +805,7 @@ export function PlatformApiKeysPage() {
     return 'https://api.example.com';
   }, []);
 
-  const [tab, setTab] = useState<'rest' | 'webhooks' | 'integrations'>('rest');
+  const [tab, setTab] = useState<'rest' | 'webhooks'>('rest');
 
   return (
     <>
@@ -823,7 +822,6 @@ export function PlatformApiKeysPage() {
       <TabBar>
         <TabButton type="button" $active={tab === 'rest'} onClick={() => setTab('rest')}>REST API</TabButton>
         <TabButton type="button" $active={tab === 'webhooks'} onClick={() => setTab('webhooks')}>Webhooks</TabButton>
-        <TabButton type="button" $active={tab === 'integrations'} onClick={() => setTab('integrations')}>Integrations</TabButton>
       </TabBar>
 
       {tab === 'rest' && (
@@ -978,13 +976,6 @@ export function PlatformApiKeysPage() {
           </DocsBlock>
         </SectionBody>
       </Section>
-      </>
-      )}
-
-      {tab === 'integrations' && (
-      <>
-      {/* ── Simkura-core connection settings ───────────────────────────────── */}
-      <PlatformIntegrationsPanel />
       </>
       )}
 

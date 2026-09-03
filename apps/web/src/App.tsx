@@ -36,6 +36,8 @@ import SecuritySettings from './pages/app/settings/SecuritySettings';
 import PlatformApiKeysPage from './pages/app/PlatformApiKeysPage';
 import PlatformDocumentsPage from './pages/app/PlatformDocumentsPage';
 import DeviceTestingPage from './pages/app/platform/DeviceTestingPage';
+import IntegrationsPage from './pages/app/platform/IntegrationsPage';
+import IntegrationDetailPage from './pages/app/platform/IntegrationDetailPage';
 import TermsPage from './pages/legal/TermsPage';
 import PrivacyPage from './pages/legal/PrivacyPage';
 import './styles/index.css';
@@ -81,6 +83,8 @@ function App() {
               <Route path="devices" element={<DevicesPage />} />
               <Route path="devices/:id" element={<DeviceDetailPage />} />
               <Route path="platform/api-keys" element={<PlatformApiKeysPage />} />
+              <Route path="platform/integrations" element={<IntegrationsPage />} />
+              <Route path="platform/integrations/:name" element={<IntegrationDetailPage />} />
               <Route path="platform/documents" element={<PlatformDocumentsPage />} />
               <Route path="platform/device-testing" element={<DeviceTestingPage />} />
               <Route path="settings" element={<SettingsLayout />}>

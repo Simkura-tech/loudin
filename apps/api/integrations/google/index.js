@@ -8,7 +8,7 @@
  *
  * Configuration resolves through the platform integration settings
  * (services/platform/integrationSettings.js) on EVERY use — a value saved
- * on the admin "API access → Integrations" tab (google card) wins, env
+ * on the admin "Integrations" tab (google card) wins, env
  * vars are the fallback:
  *   client_id     / GOOGLE_CLIENT_ID
  *   client_secret / GOOGLE_CLIENT_SECRET

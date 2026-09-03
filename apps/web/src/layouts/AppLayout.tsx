@@ -16,6 +16,7 @@ import {
   IconBuilding,
   IconFileText,
   IconKey,
+  IconPlugConnected,
   IconLock,
   IconSettings,
   IconTestPipe,
@@ -519,6 +520,10 @@ export function AppLayout() {
               </NavItem>
 
               <NavSection>System</NavSection>
+              <NavItem to="/app/platform/integrations">
+                <IconPlugConnected size={18} strokeWidth={1.75} />
+                Integrations
+              </NavItem>
               <NavItem to="/app/platform/api-keys">
                 <IconKey size={18} strokeWidth={1.75} />
                 API access

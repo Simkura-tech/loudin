@@ -29,9 +29,10 @@ router.get   ('/api-keys',     platformApiKeys.list);
 router.post  ('/api-keys',     platformApiKeys.create);
 router.delete('/api-keys/:id', platformApiKeys.revoke);
 
-// Integration settings (Simkura core) — platform_config overrides with env
-// fallback, managed from the API access page.
+// Integration settings — platform_config overrides with env fallback,
+// managed from the Integrations page (list → per-integration detail).
 router.get ('/integrations',            platformIntegrations.list);
+router.get ('/integrations/:name',      platformIntegrations.getOne);
 router.put ('/integrations/:name',      platformIntegrations.update);
 router.post('/integrations/:name/test', platformIntegrations.test);
 

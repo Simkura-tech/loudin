@@ -12,7 +12,7 @@
  *
  * Provider credentials resolve through the platform integration settings
  * (services/platform/integrationSettings.js) AT SEND TIME: a value saved
- * on the admin "API access → Integrations" tab (resend / twilio cards)
+ * on the admin "Integrations" tab (resend / twilio cards)
  * wins, env vars are the fallback. So dropping real RESEND_API_KEY /
  * TWILIO_* keys into apps/api/.env still works exactly as before — no
  * code changes required — and so does saving them from the UI.

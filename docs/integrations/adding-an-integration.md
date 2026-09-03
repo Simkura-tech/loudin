@@ -1,7 +1,7 @@
 # Adding a Platform Integration
 
 Platform integrations are the settings cards on the platform-admin
-**API access → Integrations** tab: external services (email, SMS, device
+**Integrations** tab: external services (email, SMS, device
 gateways, …) whose connection settings a platform admin can view, override,
 and test from the UI — with the server's env vars as the always-working
 fallback.
@@ -119,7 +119,7 @@ overrides should `await settings.init()` first.
 
 ## What you get automatically
 
-- A card on **API access → Integrations** with your label, description,
+- A card on **Integrations** with your label, description,
   docs link, status pill(s), one input per field with "env" / "override"
   source badges, save, clear-override, and a Test connection button.
 - REST endpoints (platform-admin only, cookie auth):

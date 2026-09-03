@@ -53,6 +53,17 @@ async function list(req, res, next) {
   } catch (err) { return next(err); }
 }
 
+// ── GET /api/platform/integrations/:name ─────────────────────────────────────
+// One integration's card data — for the detail/editor page.
+async function getOne(req, res, next) {
+  try {
+    const descriptor = registry.byName[req.params.name];
+    if (!descriptor) return badRequest(res, `Unknown integration: ${req.params.name}`);
+    await settings.init();
+    return res.json({ integration: describe(descriptor) });
+  } catch (err) { return next(err); }
+}
+
 // ── PUT /api/platform/integrations/:name ─────────────────────────────────────
 // Body: { values: { field: string } }. Empty string clears the override
 // (reverts to env). Secrets are only ever accepted here, never echoed.
@@ -116,4 +127,4 @@ async function test(req, res, next) {
   } catch (err) { return next(err); }
 }
 
-module.exports = { list, update, test };
+module.exports = { list, getOne, update, test };

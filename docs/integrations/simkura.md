@@ -28,7 +28,7 @@ Integration code lives in [`apps/api/hardware/simkura/`](../../apps/api/hardware
 | `SIMKURA_RETRY_MAX_ATTEMPTS` / `_BASE_DELAY_MS` / `_MAX_DELAY_MS` / `_JITTER_MS` | Retry tuning (defaults 3 / 1000 / 8000 / 500) |
 
 URL and key can also be set at runtime from the platform-admin
-**API access → Integrations** tab; a value saved there (stored in
+**Integrations** tab; a value saved there (stored in
 `platform_config`) wins over the env var, and clearing it reverts to env.
 Timeout and retry knobs are env-only.
 

@@ -59,7 +59,7 @@ function printSecret(webhook) {
   console.log(`Secret     : ${webhook.secret}`);
   console.log('────────────────────────────────────────────────────────────');
   console.log('The secret has been stored in the platform integration settings');
-  console.log('(API access → Integrations → Simkura) — the receiver uses it');
+  console.log('(Integrations → Simkura) — the receiver uses it');
   console.log('immediately, no restart needed. Optionally also set');
   console.log('SIMKURA_WEBHOOK_SECRET in apps/api/.env as an env fallback.');
   console.log('');

@@ -71,9 +71,16 @@ export interface UpdateResponse extends IntegrationInfo {
   integration: string;
 }
 
+export interface IntegrationResponse {
+  integration: IntegrationInfo;
+}
+
 export const integrationsApi = {
   list: () =>
     api.get<IntegrationsResponse, IntegrationsResponse>('/api/platform/integrations'),
+
+  get: (name: string) =>
+    api.get<IntegrationResponse, IntegrationResponse>(`/api/platform/integrations/${name}`),
 
   update: (name: string, values: Record<string, string>) =>
     api.put<UpdateResponse, UpdateResponse>(`/api/platform/integrations/${name}`, { values }),

@@ -64,3 +64,4 @@ apps/api/mqtt/config/certs/
 
 # Uploaded media (product images etc.) — served from disk, not tracked in git
 apps/api/uploads/
+checklist.md

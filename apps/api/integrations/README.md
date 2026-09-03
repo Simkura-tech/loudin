@@ -14,7 +14,7 @@ integrations/
 ## Adding an integration
 
 Integrations with platform-admin-editable settings (the cards on the
-**API access → Integrations** tab) are registry-driven: write one
+**Integrations** tab) are registry-driven: write one
 `integrations/<name>/integration.js` descriptor and register it in
 `services/platform/integrationRegistry.js`. See
 [`docs/integrations/adding-an-integration.md`](../../../docs/integrations/adding-an-integration.md)

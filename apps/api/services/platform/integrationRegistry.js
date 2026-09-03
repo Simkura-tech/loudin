@@ -2,7 +2,7 @@
 
 /**
  * Platform integration registry — THE list of integrations whose settings
- * are editable from the platform-admin "API access → Integrations" tab.
+ * are editable from the platform-admin "Integrations" tab.
  *
  * To add an integration, write one descriptor module and add one require()
  * to the list below — that's the whole contribution surface. See
