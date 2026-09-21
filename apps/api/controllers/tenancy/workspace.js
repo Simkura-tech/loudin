@@ -392,6 +392,10 @@ async function undoScheduledCancel(req, res, next) {
       target_type: 'company',
       target_id:   companyId,
     });
+    void events.emit('company.cancellation_undone', {
+      company: { id: companyId, type: 'end_user' },
+      actor:   { user_id: req.user.user_id },
+    });
 
     return res.json({ ok: true });
   } catch (err) {

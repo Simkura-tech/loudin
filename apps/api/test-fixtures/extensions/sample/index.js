@@ -8,6 +8,13 @@
 const { authenticate } = require('../../../middleware/core/auth');
 
 module.exports = {
+  seenEvents: [],
+
+  onEvent(envelope) {
+    this.seenEvents.push(envelope);
+    if (envelope.type === 'test.throw') throw new Error('listener blew up');
+  },
+
   preBody(app, express) {
     app.use('/api/ext-sample/raw', express.raw({ type: 'application/json' }));
   },

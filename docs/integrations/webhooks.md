@@ -70,7 +70,10 @@ a failure and retried.
 |--------------|---------------|------------|
 | `company.signed_up` | — | a company self-registers |
 | `company.first_person_added` | `person.person_id` | the company's first credential holder is created |
-| `company.subscription_cancelled` | — | a scheduled company cancellation is processed |
+| `company.subscription_cancelled` | `cancellation.{ reason_code, cancel_effective_at }` | a company admin schedules their workspace's cancellation |
+| `company.cancellation_undone` | — | the company admin withdraws that scheduled cancellation |
+| `company.canceled` | `cancellation.{ reason_code, source }` | a platform admin cancels a company outright |
+| `company.reactivated` | — | a platform admin reactivates a suspended or canceled company (also withdraws any scheduled cancellation) |
 | `device.added` | `device.device_id` | a device is claimed |
 | `device.removed` | `device.device_id` | a device is released |
 | `device.offline_extended` | `device.{ device_id, last_seen, offline_hours }` | a claimed device hasn't been seen for `SIMKURA_OFFLINE_ALERT_HOURS` (default 48) — once per offline episode |

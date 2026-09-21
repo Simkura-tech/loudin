@@ -102,6 +102,26 @@ describe('Extensions', () => {
     });
   });
 
+  describe('onEvent', () => {
+    const events = require('../integrations/events');
+    const sample = require(path.join(FIXTURES, 'sample'));
+    const settle = () => new Promise((resolve) => setImmediate(resolve));
+
+    test('receives lifecycle events in-process, with the full envelope', async () => {
+      await events.emit('device.added', { company: { id: 1, type: 'end_user' }, device: { device_id: 'X1' } });
+      await settle();
+      const seen = sample.seenEvents.find((e) => e.type === 'device.added');
+      assert.ok(seen, 'extension saw the event');
+      assert.ok(seen.event_id && seen.occurred_at, 'envelope fields present');
+      assert.equal(seen.device.device_id, 'X1');
+    });
+
+    test('a throwing listener never breaks the emitter', async () => {
+      await assert.doesNotReject(events.emit('test.throw', {}));
+      await settle();
+    });
+  });
+
   test('migrate.js runs extension migrations, namespaced by extension', async () => {
     const run = spawnSync(
       process.execPath,

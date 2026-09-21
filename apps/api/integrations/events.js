@@ -24,6 +24,7 @@
 
 const crypto = require('crypto');
 const dispatcher = require('../services/webhooks/dispatcher');
+const extensions = require('../extensions');
 
 /** Build the common event envelope. */
 function buildEnvelope(type, payload) {
@@ -36,7 +37,9 @@ function buildEnvelope(type, payload) {
 }
 
 async function emit(type, payload) {
-  void dispatcher.dispatch(buildEnvelope(type, payload));
+  const envelope = buildEnvelope(type, payload);
+  void dispatcher.dispatch(envelope);
+  extensions.dispatchEvent(envelope); // in-process listeners — apps/api/extensions
 }
 
 module.exports = { emit, buildEnvelope };

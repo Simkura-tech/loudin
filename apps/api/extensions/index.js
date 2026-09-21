@@ -19,6 +19,10 @@
  *                           to block the request, or call next().
  *   start({ server })       Runs once at boot (not under test) — start
  *                           background workers here.
+ *   onEvent(envelope)       Called in-process for every lifecycle event
+ *                           (integrations/events.js) — device.added,
+ *                           company.subscription_cancelled, … Errors are
+ *                           logged, never propagated to the request.
  *
  * SQL files in <extension>/migrations/ are run by database/scripts/migrate.js
  * after the core migrations and recorded as "<extension>/<file>", so their
@@ -75,6 +79,16 @@ function start(context) {
   for (const ext of loaded) ext.hooks.start?.(context);
 }
 
+/** Fan a lifecycle event out to every extension. Never throws. */
+function dispatchEvent(envelope) {
+  for (const ext of loaded) {
+    if (!ext.hooks.onEvent) continue;
+    Promise.resolve()
+      .then(() => ext.hooks.onEvent(envelope))
+      .catch((err) => console.error(`[extensions] ${ext.name}.onEvent failed for "${envelope.type}":`, err.message));
+  }
+}
+
 /** Run each extension's authGate in order; any gate may end the request. */
 function runAuthGates(req, res, next) {
   const gates = loaded.map((ext) => ext.hooks.authGate).filter(Boolean);
@@ -92,4 +106,4 @@ function runAuthGates(req, res, next) {
   return step();
 }
 
-module.exports = { discover, load, preBody, routes, start, runAuthGates };
+module.exports = { discover, load, preBody, routes, start, dispatchEvent, runAuthGates };

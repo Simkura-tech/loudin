@@ -54,6 +54,14 @@ module.exports = {
   start({ server }) {
     require('./renewalWorker').start();
   },
+
+  // Every lifecycle event, in-process (the same envelopes outbound webhooks
+  // carry — see docs/integrations/webhooks.md for the catalog).
+  async onEvent(event) {
+    if (event.type === 'device.added' || event.type === 'device.removed') {
+      await syncSeatCount(event.company.id);
+    }
+  },
 };
 ```
 
@@ -67,6 +75,9 @@ Behaviour worth knowing:
   endpoints are never gated. Keep gates fast; they run on every signed-in
   request. Exempt your own recovery paths (a lapsed tenant still needs to
   reach `/api/billing` to pay).
+- `onEvent` is fire-and-forget: it runs after the triggering request has
+  moved on, its errors are logged and swallowed, and there is no retry. Make
+  handlers idempotent and reconcile from your own source of truth.
 - `EXTENSIONS_DIR` points the loader at a different folder. The test suite
   uses it; you normally shouldn't.
 

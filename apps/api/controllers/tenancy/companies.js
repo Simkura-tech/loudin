@@ -8,6 +8,7 @@
 
 const { query } = require('../../database/db');
 const { recordAudit } = require('../../services/platform/audit');
+const events = require('../../integrations/events');
 
 const ALLOWED_TYPES    = ['platform', 'end_user'];
 const ALLOWED_STATUSES = ['active', 'inactive', 'suspended', 'canceled'];
@@ -299,6 +300,10 @@ async function reactivate(req, res, next) {
       target_id:   id,
       metadata:    { previous_status: company.status },
     });
+    void events.emit('company.reactivated', {
+      company: { id, type: company.company_type },
+      actor:   { user_id: req.user.user_id },
+    });
 
     return res.json({ ok: true });
   } catch (err) {
@@ -350,6 +355,11 @@ async function cancel(req, res, next) {
       target_type: 'company',
       target_id:   id,
       metadata:    { reason_code: reasonCode, details, source: 'platform_admin' },
+    });
+    void events.emit('company.canceled', {
+      company: { id, type: company.company_type },
+      actor:   { user_id: req.user.user_id },
+      cancellation: { reason_code: reasonCode, source: 'platform_admin' },
     });
 
     return res.json({ ok: true });
