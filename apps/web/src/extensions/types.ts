@@ -1,9 +1,10 @@
 /**
  * Frontend extension contract — upstream-owned. The registry you edit is
- * ./index.ts; see docs/extensions.md.
+ * ./index.tsx; see docs/extensions.md.
  */
 
-import type { ComponentType, ReactElement } from 'react';
+import type { ReactElement } from 'react';
+import type { TablerIcon } from '@tabler/icons-react';
 import type { AuthUser } from '../services/auth/auth';
 
 /** A route to splice into the router. Mirrors <Route>: give `path`, or set
@@ -21,7 +22,8 @@ export interface ExtensionRoute {
 export interface ExtensionNavItem {
   to: string;
   label: string;
-  icon: ComponentType<{ size?: number; strokeWidth?: number }>;
+  /** Any @tabler/icons-react icon, to match the core sidebar. */
+  icon: TablerIcon;
   /** Heading to group under in the platform-admin sidebar (ignored in the
    *  flat end-user sidebar). Items sharing a section share one heading. */
   section?: string;
