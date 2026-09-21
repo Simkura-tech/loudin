@@ -5,8 +5,9 @@
  *
  * Boots the app with EXTENSIONS_DIR pointed at test-fixtures/extensions and
  * verifies each hook: routes, the pre-body-parser slot, authGate, and
- * per-extension migrations. Also pins the default: a stock checkout loads
- * zero extensions.
+ * per-extension migrations, onEvent. Nothing here asserts on the real
+ * apps/api/extensions/ folder — this suite has to pass in forks that have
+ * extensions of their own.
  *
  * Requires a running local PostgreSQL with the DB seeded (npm run db:reset).
  */
@@ -34,9 +35,8 @@ describe('Extensions', () => {
     await pool.end();
   });
 
-  test('a stock checkout ships no extensions', () => {
-    const shipped = extensions.discover(path.join(__dirname, '..', 'extensions'));
-    assert.deepEqual(shipped, []);
+  test('discover() tolerates a missing directory', () => {
+    assert.deepEqual(extensions.discover(path.join(FIXTURES, 'does-not-exist')), []);
   });
 
   test('discover() finds the fixture without loading its code', () => {
