@@ -37,6 +37,8 @@ import IntegrationDetailPage from './pages/app/platform/IntegrationDetailPage';
 import FeaturesPage from './pages/app/platform/FeaturesPage';
 import TermsPage from './pages/legal/TermsPage';
 import PrivacyPage from './pages/legal/PrivacyPage';
+import { extensions } from './extensions';
+import { renderRoutes } from './extensions/renderRoutes';
 import './styles/index.css';
 
 function App() {
@@ -54,13 +56,16 @@ function App() {
         <AuthProvider>
           <FeaturesProvider>
           <Routes>
-            <Route path="/" element={<Navigate to="/login" replace />} />
+            <Route path="/" element={extensions.home ?? <Navigate to="/login" replace />} />
             <Route path="/login" element={<LoginPage />} />
             <Route path="/forgot-password" element={<ForgotPasswordPage />} />
             <Route path="/signup" element={<SignupPage />} />
 
             <Route path="/terms"   element={<TermsPage />} />
             <Route path="/privacy" element={<PrivacyPage />} />
+
+            {/* Fork-supplied pages — src/extensions/index.ts (empty upstream). */}
+            {renderRoutes(extensions.publicRoutes)}
 
             <Route
               path="/app"
@@ -86,7 +91,11 @@ function App() {
                 <Route path="workspace" element={<WorkspaceSettings />} />
                 <Route path="profile"   element={<ProfileSettings />} />
                 <Route path="security"  element={<SecuritySettings />} />
+                {extensions.settingsTabs.map((tab) => (
+                  <Route key={tab.path} path={tab.path} element={tab.element} />
+                ))}
               </Route>
+              {renderRoutes(extensions.appRoutes)}
             </Route>
 
             <Route path="*" element={<NotFoundPage />} />

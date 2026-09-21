@@ -15,6 +15,9 @@ const helmet       = require('helmet');
 const morgan       = require('morgan');
 const cookieParser = require('cookie-parser');
 const http         = require('http');
+const extensions   = require('./extensions');
+
+extensions.load(); // apps/api/extensions/<name>/ — none ship with Loudin
 
 const app    = express();
 const server = http.createServer(app);   // wrapped for Socket.io
@@ -56,6 +59,9 @@ app.use(morgan(isProduction ? 'combined' : 'dev'));
 // raw parser BEFORE express.json() so the Simkura receiver gets the exact
 // bytes Simkura signed (see routes/webhooks.js).
 app.use('/api/webhooks/simkura', express.raw({ type: 'application/json' }));
+
+// Extensions with their own signed webhooks register raw parsers here too.
+extensions.preBody(app, express);
 
 app.use(cookieParser());
 app.use(express.json());
@@ -151,6 +157,9 @@ app.use('/api/external', require('./routes/external'));
 // ── Inbound webhooks (/api/webhooks/*) — signature-verified, no session ───────
 app.use('/api/webhooks', require('./routes/webhooks'));
 
+// ── Extension routes — mounted last so core paths always win ─────────────────
+extensions.routes(app);
+
 // ── 404 + error handler ───────────────────────────────────────────────────
 
 app.use((req, res) => {
@@ -215,6 +224,8 @@ if (require.main === module) {
 
     if (simkuraDiscoveryWorker) simkuraDiscoveryWorker.start();
     if (simkuraStateSyncWorker) simkuraStateSyncWorker.start();
+
+    extensions.start({ server });
   });
 }
 

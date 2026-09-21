@@ -7,6 +7,8 @@
 
 import { NavLink, Outlet } from 'react-router-dom';
 import styled from '@emotion/styled';
+import { useAuth } from '../../../contexts/AuthContext';
+import { extensions } from '../../../extensions';
 
 const Page = styled.div`
   max-width: 680px;
@@ -58,6 +60,8 @@ const Tab = styled(NavLink)`
 `;
 
 export function SettingsLayout() {
+  const { user } = useAuth();
+
   return (
     <Page>
       <PageHeader>
@@ -69,6 +73,11 @@ export function SettingsLayout() {
         <Tab to="/app/settings/workspace">Workspace</Tab>
         <Tab to="/app/settings/profile">Profile</Tab>
         <Tab to="/app/settings/security">Security</Tab>
+        {user && extensions.settingsTabs
+          .filter((tab) => !tab.visible || tab.visible(user))
+          .map((tab) => (
+            <Tab key={tab.path} to={`/app/settings/${tab.path}`}>{tab.label}</Tab>
+          ))}
       </Tabs>
 
       <Outlet />

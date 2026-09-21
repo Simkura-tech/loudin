@@ -5,7 +5,7 @@
  * matched nested route via <Outlet />.
  */
 
-import { useState } from 'react';
+import { Fragment, useState } from 'react';
 import { Link, NavLink, Outlet, useNavigate } from 'react-router-dom';
 import styled from '@emotion/styled';
 import {
@@ -25,8 +25,11 @@ import { useAuth } from '../contexts/AuthContext';
 import { workspaceApi } from '../services/tenancy/workspace';
 import { auth } from '../services/auth/auth';
 import { branding } from '../branding';
+import { extensions } from '../extensions';
+import type { ExtensionNavItem } from '../extensions/types';
 
 const SIDEBAR_WIDTH = 240;
+const DEFAULT_EXT_SECTION = 'More';
 
 const Page = styled.div`
   min-height: 100vh;
@@ -393,6 +396,16 @@ export function AppLayout() {
   // so only they see the prompt. Hidden while impersonating.
   const showNamePrompt = !isImpersonating && isAdmin && user.name_auto_generated && !namePromptDismissed;
 
+  // Fork-supplied sidebar entries (src/extensions/index.ts — empty upstream).
+  const extNav = extensions.navItems.filter((item) => !item.visible || item.visible(user));
+  const extNavSections = [...new Set(extNav.map((item) => item.section ?? DEFAULT_EXT_SECTION))];
+  const renderExtNavItem = (item: ExtensionNavItem) => (
+    <NavItem key={item.to} to={item.to}>
+      <item.icon size={18} strokeWidth={1.75} />
+      {item.label}
+    </NavItem>
+  );
+
   const handleSignOut = async () => {
     setMenuOpen(false);
     await logout();
@@ -507,6 +520,15 @@ export function AppLayout() {
                 People
               </NavItem>
 
+              {extNavSections.map((section) => (
+                <Fragment key={section}>
+                  <NavSection>{section}</NavSection>
+                  {extNav
+                    .filter((item) => (item.section ?? DEFAULT_EXT_SECTION) === section)
+                    .map(renderExtNavItem)}
+                </Fragment>
+              ))}
+
               <NavSection>System</NavSection>
               <NavItem to="/app/platform/integrations">
                 <IconPlugConnected size={18} strokeWidth={1.75} />
@@ -540,6 +562,7 @@ export function AppLayout() {
                 <IconLock size={18} strokeWidth={1.75} />
                 Devices
               </NavItem>
+              {extNav.map(renderExtNavItem)}
               <NavItem to="/app/settings">
                 <IconSettings size={18} strokeWidth={1.75} />
                 Settings

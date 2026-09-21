@@ -3,6 +3,7 @@ require('dotenv').config({ path: path.join(__dirname, '..', '..', '.env') });
 const fs = require('fs');
 const crypto = require('crypto');
 const { Pool } = require('pg');
+const { discover } = require('../../extensions');
 
 if (!process.env.DB_NAME) {
   console.error('migrate.js: DB_NAME is not set — refusing to run against an unknown database.');
@@ -40,15 +41,25 @@ async function runMigrations() {
       ALTER TABLE migrations ADD COLUMN IF NOT EXISTS content_hash VARCHAR(64);
     `);
 
-    const migrationsDir = path.join(__dirname, '..', 'migrations');
-    const files = fs.readdirSync(migrationsDir)
-      .filter(f => f.endsWith('.sql'))
-      .sort();
+    // Core migrations first, then each extension's own migrations/ folder
+    // (apps/api/extensions/<name>/migrations). Extension files are recorded
+    // as "<name>/<file>" so their numbering never collides with core's.
+    const migrations = [];
+    const collect = (dir, prefix) => {
+      if (!fs.existsSync(dir)) return;
+      for (const f of fs.readdirSync(dir).filter(f => f.endsWith('.sql')).sort()) {
+        migrations.push({ file: prefix + f, fullPath: path.join(dir, f) });
+      }
+    };
+    collect(path.join(__dirname, '..', 'migrations'), '');
+    for (const ext of discover()) {
+      collect(path.join(ext.dir, 'migrations'), `${ext.name}/`);
+    }
 
     let driftCount = 0;
 
-    for (const file of files) {
-      const sql = fs.readFileSync(path.join(migrationsDir, file), 'utf8');
+    for (const { file, fullPath } of migrations) {
+      const sql = fs.readFileSync(fullPath, 'utf8');
       const currentHash = sha256(sql);
 
       const { rows } = await client.query(

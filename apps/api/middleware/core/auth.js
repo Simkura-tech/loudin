@@ -11,6 +11,7 @@
 
 const { verifyToken } = require('../../utils/jwt');
 const { getAuthToken } = require('../../utils/authCookie');
+const { runAuthGates } = require('../../extensions');
 
 function attachUser(decoded, req) {
   req.user = {
@@ -54,13 +55,15 @@ async function authenticate(req, res, next) {
   try {
     const decoded = verifyToken(token);
     attachUser(decoded, req);
-    return next();
   } catch (err) {
     return res.status(401).json({
       error: 'Authentication failed',
       message: err.message,
     });
   }
+  // Extension authGates (e.g. a billing extension blocking a lapsed tenant)
+  // run after the session is established. No extensions → straight to next().
+  return runAuthGates(req, res, next);
 }
 
 /**

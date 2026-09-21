@@ -5,6 +5,7 @@
 | [deployment-shapes.md](./deployment-shapes.md) | The two deployment shapes — service provider vs. managing your own doors — and how to configure each |
 | [company-hierarchy.md](./company-hierarchy.md) | The platform / end-user tiers from an integrator's point of view |
 | [white-label.md](./white-label.md) | Re-branding the frontend: the single branding config, asset swaps, theme colors |
+| [extensions.md](./extensions.md) | Building on top of Loudin without editing core — API hooks, per-extension migrations, frontend routes / nav / settings tabs, keeping a fork mergeable |
 | [integrations/simkura.md](./integrations/simkura.md) | The Simkura device integration — REST contract, inbound webhooks, sync workers, provisioning, credential push |
 | [integrations/webhooks.md](./integrations/webhooks.md) | Outbound webhooks — signed lifecycle events, retries, event catalog |
 | [integrations/adding-an-integration.md](./integrations/adding-an-integration.md) | The integration registry — adding a service card to the platform Integrations UI |
