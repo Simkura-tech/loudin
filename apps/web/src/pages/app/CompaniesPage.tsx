@@ -10,7 +10,8 @@
 import { useCallback, useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import styled from '@emotion/styled';
-import { IconBuilding, IconSearch } from '@tabler/icons-react';
+import { IconBuilding, IconPlus, IconSearch } from '@tabler/icons-react';
+import NewCompanyDialog from '../../components/platform/NewCompanyDialog';
 import {
   companiesApi,
   type Company,
@@ -19,9 +20,34 @@ import {
 } from '../../services/platform/companies';
 
 const TYPE_OPTIONS: { value: CompanyType; label: string }[] = [
-  { value: 'platform', label: 'Platform' },
-  { value: 'end_user', label: 'End-user' },
+  { value: 'platform',  label: 'Platform' },
+  { value: 'end_user',  label: 'End-user' },
+  { value: 'installer', label: 'Installer' },
 ];
+
+function typeLabel(t: CompanyType): string {
+  return t === 'end_user' ? 'End-user' : t[0].toUpperCase() + t.slice(1);
+}
+
+const NewButton = styled.button`
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  height: 34px;
+  padding: 0 14px;
+  border-radius: 8px;
+  border: none;
+  background: ${({ theme }) => theme.colors.brand.primary};
+  color: #fff;
+  font-size: 13px;
+  font-weight: 600;
+  font-family: inherit;
+  cursor: pointer;
+  white-space: nowrap;
+  margin-left: auto;
+
+  &:hover { background: ${({ theme }) => theme.colors.brand.primaryHover ?? theme.colors.brand.primary}; }
+`;
 
 const STATUSES: CompanyStatus[] = ['active', 'inactive', 'suspended', 'canceled'];
 
@@ -149,11 +175,13 @@ const TypePill = styled.span<{ $type: CompanyType }>`
   letter-spacing: 0.02em;
   text-transform: capitalize;
   background: ${({ $type }) =>
-    $type === 'platform' ? '#dbeafe'
-  :                        '#f1f5f9'};
+    $type === 'platform'  ? '#dbeafe'
+  : $type === 'installer' ? '#e0e7ff'
+  :                         '#f1f5f9'};
   color: ${({ $type }) =>
-    $type === 'platform' ? '#1e40af'
-  :                        '#475569'};
+    $type === 'platform'  ? '#1e40af'
+  : $type === 'installer' ? '#3730a3'
+  :                         '#475569'};
 `;
 
 const StatusPill = styled.span<{ $status: CompanyStatus }>`
@@ -241,6 +269,7 @@ export function CompaniesPage({ embedded = false }: { embedded?: boolean } = {})
   const [typeFilter, setTypeFilter]     = useState<CompanyType | ''>('');
   const [statusFilter, setStatusFilter] = useState<CompanyStatus | ''>('');
   const [error, setError]         = useState<string | null>(null);
+  const [newOpen, setNewOpen]     = useState(false);
 
   const fetch = useCallback(async () => {
     setError(null);
@@ -306,7 +335,17 @@ export function CompaniesPage({ embedded = false }: { embedded?: boolean } = {})
             <option key={s} value={s}>{s[0].toUpperCase() + s.slice(1)}</option>
           ))}
         </FilterSelect>
+        <NewButton type="button" onClick={() => setNewOpen(true)}>
+          <IconPlus size={16} /> New company
+        </NewButton>
       </Toolbar>
+
+      {newOpen && (
+        <NewCompanyDialog
+          onClose={() => setNewOpen(false)}
+          onCreated={() => { void fetch(); }}
+        />
+      )}
 
       <TableCard>
         {companies === null ? (
@@ -343,7 +382,7 @@ export function CompaniesPage({ embedded = false }: { embedded?: boolean } = {})
                   </td>
                   <td>
                     <TypePill $type={c.company_type}>
-                      {c.company_type === 'end_user' ? 'End-user' : c.company_type}
+                      {typeLabel(c.company_type)}
                     </TypePill>
                   </td>
                   <td>{c.parent_company_name || <span style={{ opacity: 0.4 }}>—</span>}</td>

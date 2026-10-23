@@ -23,8 +23,10 @@ tribute.
 ## Features
 
 - **Multi-tenant companies** — a platform operator plus any number of end-user companies, each with scoped admin access
+- **Installers** — optional cross-company technician businesses that customers (or the platform) grant access to; they sign up themselves or are provisioned by the platform, work inside a customer workspace through an audited service session, and can provision new customers themselves
 - **Device management** — claim, configure, and monitor IoT door locks through the Simkura REST API
 - **People & credentials** — manage credential holders and their PIN codes and cards, and push them to specific devices
+- **Team logins** — invite colleagues to sign in and manage the workspace with you; single-use emailed links, admin or read-only role
 - **Schedules** — shifts and holidays control when credentials are valid, per device
 - **Real-time events** — device events stream in via inbound webhooks and reach the UI over WebSocket (Socket.io); signed outbound webhooks let external systems subscribe to lifecycle events
 

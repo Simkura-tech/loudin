@@ -7,8 +7,11 @@
  */
 
 import api from '../api';
+import type { InstallerGrant } from '../tenancy/installers';
 
-export type CompanyType   = 'platform' | 'end_user';
+export type CompanyType   = 'platform' | 'end_user' | 'installer';
+/** Types the platform admin may provision (POST /api/companies). */
+export type CreatableCompanyType = 'end_user' | 'installer';
 export type CompanyStatus = 'active' | 'inactive' | 'suspended' | 'canceled';
 
 export type CancellationReasonCode =
@@ -65,6 +68,24 @@ export interface Company {
   updated_at: string;
 }
 
+export interface CreateCompanyPayload {
+  name: string;
+  company_type: CreatableCompanyType;
+  company_email?: string;
+  admin_email: string;
+  admin_first_name?: string;
+  admin_last_name?: string;
+}
+
+/** POST /api/companies — the company plus the first-admin invite outcome. */
+export interface CreateCompanyResult {
+  company: Company;
+  invite: { id: number; email: string; expires_at: string };
+  accept_url: string;
+  delivery: 'email' | 'console';
+  delivery_error?: string;
+}
+
 export interface ListResponse {
   companies: Company[];
   total: number;
@@ -115,6 +136,27 @@ export interface CompanyDeviceRow {
 export const companiesApi = {
   list: (params: ListParams = {}) =>
     api.get<ListResponse, ListResponse>('/api/companies', { params }),
+
+  create: (payload: CreateCompanyPayload) =>
+    api.post<CreateCompanyResult, CreateCompanyResult>('/api/companies', payload),
+
+  // Installer access (services/tenancy/installers.ts has the grant shape).
+  installers: (id: number) =>
+    api.get<{ grants: InstallerGrant[] }, { grants: InstallerGrant[] }>(`/api/companies/${id}/installers`)
+      .then((r) => r.grants),
+
+  customers: (id: number) =>
+    api.get<{ customers: InstallerGrant[] }, { customers: InstallerGrant[] }>(`/api/companies/${id}/customers`)
+      .then((r) => r.customers),
+
+  grantInstaller: (id: number, installerCompanyId: number) =>
+    api.post<{ grant: InstallerGrant; created: boolean }, { grant: InstallerGrant; created: boolean }>(
+      `/api/companies/${id}/installers`, { installer_company_id: installerCompanyId },
+    ),
+
+  revokeInstaller: (id: number, grantId: number) =>
+    api.delete<{ grant: InstallerGrant }, { grant: InstallerGrant }>(`/api/companies/${id}/installers/${grantId}`)
+      .then((r) => r.grant),
 
   get: (id: number) =>
     api.get<{ company: Company }, { company: Company }>(`/api/companies/${id}`).then((r) => r.company),

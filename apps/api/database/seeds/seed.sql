@@ -10,12 +10,15 @@
 -- so re-running doesn't create duplicates.
 --
 -- What you get after a --reset --seed:
---   * 3 companies — the platform (Loudin Platform) and two independent
+--   * 4 companies — the platform (Loudin Platform), two independent
 --     end-user companies: Demo Customer Co (the main fixture tenant) and
 --     Brookline Coworking (a second, unrelated tenant so cross-company
---     isolation can be exercised by hand and by test/tenantIsolation.test.js).
---     Company types are platform | end_user only — there is no reseller tier.
---   * 3 admin users (one per company)
+--     isolation can be exercised by hand and by test/tenantIsolation.test.js),
+--     and one installer company, Northside Install Co, which has been granted
+--     access to Demo Customer Co (installer_grants) so the service-session
+--     flow can be tried by hand: log in as installer@northside.example.
+--     Company types are platform | end_user | installer — no reseller tier.
+--   * 4 admin users (one per company)
 --   * 12 people in the end-user company spread across 4 departments
 --   * 4 people groups
 --   * 3 devices on the end-user company — Simkura's three PUBLIC SANDBOX
@@ -36,6 +39,7 @@ DO $seed$
 DECLARE
   platform_id INTEGER;
   end_user_id INTEGER;
+  installer_id INTEGER;
 
   alice_id   INTEGER; bob_id     INTEGER; carol_id   INTEGER;
   david_id   INTEGER; emma_id    INTEGER; frank_id   INTEGER;
@@ -418,7 +422,28 @@ BEGIN
      '$2b$10$/sl9aeZKp7Kwh0vII3Mxx.WVvBnBbzxJ0jBZPbSQM2bmmQCfoB79y',
      true, NOW() - INTERVAL '7 months', 'active');
 
-  RAISE NOTICE 'Seed complete: % companies (platform + 2 end-users), % devices (the 3 Simkura sandbox fixtures), % credentials, ~23 events.',
+  -- ── Installer company (cross-company technician business) ────────────────
+  -- Owns no doors; its users open service sessions inside customer
+  -- workspaces that have granted it access (migration 092).
+  INSERT INTO companies (name, company_type, status, company_email, company_url, created_at, updated_at)
+    VALUES ('Northside Install Co', 'installer', 'active', 'installer@northside.example', 'https://northside.example',
+            NOW() - INTERVAL '9 months', NOW() - INTERVAL '9 months')
+    RETURNING id INTO installer_id;
+
+  INSERT INTO users (
+    company_id, user_type_id, email, first_name, last_name,
+    password_hash, email_verified, email_verified_at, status
+  ) VALUES
+    (installer_id, 1, 'installer@northside.example', 'Nora', 'Installer',
+     '$2b$10$/sl9aeZKp7Kwh0vII3Mxx.WVvBnBbzxJ0jBZPbSQM2bmmQCfoB79y',
+     true, NOW() - INTERVAL '9 months', 'active');
+
+  -- Demo Customer Co has granted Northside access (granted by the platform admin).
+  INSERT INTO installer_grants (installer_company_id, customer_company_id, granted_by, granted_at)
+    SELECT installer_id, end_user_id, u.id, NOW() - INTERVAL '8 months'
+      FROM users u WHERE u.email = 'platform-admin@loudin.com';
+
+  RAISE NOTICE 'Seed complete: % companies (platform + 2 end-users + 1 installer), % devices (the 3 Simkura sandbox fixtures), % credentials, ~23 events.',
     (SELECT COUNT(*) FROM companies),
     (SELECT COUNT(*) FROM devices),
     (SELECT COUNT(*) FROM credentials);

@@ -17,6 +17,7 @@ const { query } = require('../../database/db');
 // events through integrations/events.js. Keep in sync with the emit sites.
 const ALLOWED_EVENT_TYPES = [
   'company.signed_up',
+  'company.created',          // platform admin provisions a company (end_user or installer)
   'company.first_person_added',
   'company.subscription_cancelled',
   'company.cancellation_undone',
@@ -27,6 +28,8 @@ const ALLOWED_EVENT_TYPES = [
   'device.offline_extended',
   'device.battery_dead',      // relayed from Simkura health.battery_dead — lock in safe mode
   'device.battery_recovered', // the matching all-clear
+  'installer.granted',        // an installer company may now work in this customer's workspace
+  'installer.revoked',        // …and may not any more
 ];
 
 const SECRET_BYTES = 24;

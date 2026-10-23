@@ -9,8 +9,9 @@
 const { query } = require('../../database/db');
 const { recordAudit } = require('../../services/platform/audit');
 const events = require('../../integrations/events');
+const { provisionCompany, isProvisionError } = require('../../services/tenancy/provisioning');
 
-const ALLOWED_TYPES    = ['platform', 'end_user'];
+const ALLOWED_TYPES    = ['platform', 'end_user', 'installer'];
 const ALLOWED_STATUSES = ['active', 'inactive', 'suspended', 'canceled'];
 const MAX_LIMIT = 200;
 
@@ -162,6 +163,65 @@ async function get(req, res, next) {
 }
 
 // â”€â”€ GET /api/companies/:id/users â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+// ── POST /api/companies ─────────────────────────────────────────────────────
+// Provision a company and invite its first Admin. This is how installer
+// companies come into existence (self-signup is end_user only) and how a
+// service provider onboards a customer without the customer self-signing-up.
+//
+// Body: { name, company_type: 'end_user' | 'installer', company_email?,
+//         admin_email, admin_first_name?, admin_last_name? }
+//
+// The invite email + accept link come back in the response exactly like
+// POST /api/workspace/invites, so the platform admin can hand the link over.
+async function create(req, res, next) {
+  try {
+    const {
+      name, company_type, company_email,
+      admin_email, admin_first_name, admin_last_name,
+    } = req.body || {};
+
+    const result = await provisionCompany({
+      name,
+      companyType:    company_type,
+      companyEmail:   company_email,
+      adminEmail:     admin_email,
+      adminFirstName: admin_first_name,
+      adminLastName:  admin_last_name,
+      createdBy:      req.user.user_id,
+    });
+    const { company } = result;
+
+    recordAudit(req, 'company.create', {
+      target_type: 'company',
+      target_id:   company.id,
+      metadata:    { name: company.name, company_type, admin_email: result.adminEmail, delivery: result.delivery, source: 'platform' },
+    });
+    void events.emit('company.created', {
+      company: { id: company.id, type: company_type },
+      actor:   { user_id: req.user.user_id },
+      source:  'platform',
+    });
+
+    return res.status(201).json(provisionResponse(result));
+  } catch (err) {
+    if (isProvisionError(err)) {
+      return res.status(err.status).json({ error: err.code, code: err.code, message: err.message });
+    }
+    return next(err);
+  }
+}
+
+/** Response body shared with POST /api/installer/customers. */
+function provisionResponse({ company, invite, acceptUrl, delivery, deliveryError }) {
+  return {
+    company: publicCompany({ ...company, user_count: 0, device_count: 0 }),
+    invite,
+    accept_url: acceptUrl,
+    delivery,
+    ...(deliveryError && { delivery_error: deliveryError }),
+  };
+}
+
 // Lists the software users for a given company.
 async function listUsers(req, res, next) {
   try {
@@ -369,7 +429,8 @@ async function cancel(req, res, next) {
 }
 
 module.exports = {
-  list, get, listUsers, listDevices,
+  list, get, create, listUsers, listDevices,
   suspend, reactivate, cancel,
   ALLOWED_CANCELLATION_REASON_CODES,
+  provisionResponse,
 };

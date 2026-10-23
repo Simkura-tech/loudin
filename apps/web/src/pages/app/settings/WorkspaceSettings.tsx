@@ -27,6 +27,7 @@ import {
   type WorkspacePatch,
 } from '../../../services/tenancy/workspace';
 import CountryInput from '../../../components/forms/CountryInput';
+import InstallerAccessDrawer from '../../../components/settings/InstallerAccessDrawer';
 
 // ── Drawer styling (collapsible <details>) ──────────────────────────────────
 
@@ -775,6 +776,12 @@ export function WorkspaceSettings() {
           ))}
         </DrawerBody>
       </Drawer>
+
+      {/* ── 6. Installer access (end-user admins) ───────────────── */}
+      {/* Saves itself — a grant is an access decision, not a profile field. */}
+      {isAdmin && workspace.company_type === 'end_user' && (
+        <InstallerAccessDrawer readOnly={!!user?.impersonation} />
+      )}
 
       {isAdmin && (
         <Actions>

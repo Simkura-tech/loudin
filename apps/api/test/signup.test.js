@@ -3,7 +3,7 @@
 /**
  * Signup / register-flow tests — POST /api/auth/register.
  *
- * The register flow is end-user-only (companyType is limited to 'end_user')
+ * The register flow creates end-user or installer companies (never platform)
  * and gated by the platform_config 'signups.enabled' toggle
  * (services/platform/instanceSettings.js) with a SIGNUPS_DISABLED 403 when
  * closed.
@@ -39,12 +39,19 @@ const HAPPY = {
   companyType:    'end_user',
   terms_accepted: true,
 };
+// Installer self-signup — same flow, different company type.
+const INSTALLER = {
+  ...HAPPY,
+  email:       'signup-e2e-installer@test.loudin.example',
+  companyName: 'Signup E2E Installer Co',
+  companyType: 'installer',
+};
 // Used for attempts that must NOT create rows (gate/validation tests).
 const NEVER_CREATED_EMAIL = 'signup-e2e-blocked@test.loudin.example';
 
 /** Delete the happy-path user + company (idempotent; safe pre/post). */
 async function deleteSignupRows() {
-  for (const email of [HAPPY.email, NEVER_CREATED_EMAIL]) {
+  for (const email of [HAPPY.email, INSTALLER.email, NEVER_CREATED_EMAIL]) {
     const { rows } = await pool.query('SELECT id, company_id FROM users WHERE email = $1', [email]);
     for (const row of rows) {
       await pool.query('DELETE FROM users WHERE id = $1', [row.id]);
@@ -55,9 +62,9 @@ async function deleteSignupRows() {
   // company insert can't happen — same transaction — but belt & braces).
   await pool.query(
     `DELETE FROM companies c
-      WHERE c.name = $1
+      WHERE c.name = ANY($1)
         AND NOT EXISTS (SELECT 1 FROM users u WHERE u.company_id = c.id)`,
-    [HAPPY.companyName]
+    [[HAPPY.companyName, INSTALLER.companyName]]
   );
 }
 
@@ -150,11 +157,49 @@ describe('Loudin API — signup flow', () => {
     });
   });
 
-  // ── companyType is limited to end_user ──────────────────────────────────
+  // ── Installer self-signup ────────────────────────────────────────────────
+
+  describe('Installer signup', () => {
+    test('installer without a company name → 400, no rows created', async () => {
+      const res = await request(app).post('/api/auth/register')
+        .send({ ...INSTALLER, email: NEVER_CREATED_EMAIL, companyName: '' });
+      assert.equal(res.status, 400, JSON.stringify(res.body));
+      assert.match(res.body.message || '', /Company name is required/);
+      const { rows } = await pool.query('SELECT 1 FROM users WHERE email = $1', [NEVER_CREATED_EMAIL]);
+      assert.equal(rows.length, 0);
+    });
+
+    test('creates an active installer company whose first user is Admin', async () => {
+      const res = await request(app).post('/api/auth/register').send(INSTALLER);
+      assert.equal(res.status, 201, JSON.stringify(res.body));
+      assert.equal(res.body.user.company_type, 'installer');
+      assert.equal(res.body.user.user_type_id, 1);
+      assert.equal(res.body.user.company_name, INSTALLER.companyName);
+      assert.ok(res.headers['set-cookie']?.length, 'issues a session');
+
+      const { rows: [c] } = await pool.query(
+        'SELECT company_type, status FROM companies WHERE id = $1', [res.body.user.company_id]);
+      assert.equal(c.company_type, 'installer');
+      assert.equal(c.status, 'active');
+
+      // The new installer lands on an empty Customers list and is pickable
+      // by customers right away.
+      const cookie = res.headers['set-cookie'];
+      const list = await request(app).get('/api/installer/customers').set('Cookie', cookie);
+      assert.equal(list.status, 200);
+      assert.deepEqual(list.body.customers, []);
+      const { rows } = await pool.query(
+        `SELECT 1 FROM companies WHERE company_type = 'installer' AND status = 'active' AND name = $1`,
+        [INSTALLER.companyName]);
+      assert.equal(rows.length, 1);
+    });
+  });
+
+  // ── companyType is limited to end_user / installer ───────────────────────
   //
   // Actual contract (controllers/auth/auth.js): companyType is REQUIRED and
-  // validated against ALLOWED_SIGNUP_COMPANY_TYPES = ['end_user']. Anything
-  // else is rejected with 400 (not silently coerced).
+  // validated against ALLOWED_SIGNUP_COMPANY_TYPES = ['end_user', 'installer'].
+  // Anything else is rejected with 400 (not silently coerced).
 
   describe('companyType restriction', () => {
     for (const attempted of ['reseller', 'platform']) {

@@ -11,7 +11,7 @@
  */
 
 import { useEffect, useState } from 'react';
-import { Link } from 'react-router-dom';
+import { Link, Navigate } from 'react-router-dom';
 import styled from '@emotion/styled';
 import {
   IconArrowRight,
@@ -307,6 +307,13 @@ export function OverviewPage() {
   }, [isPlatformAdmin]);
 
   if (!user) return null;
+
+  // An installer's home workspace owns no doors — its overview is the
+  // customer list. Inside a service session company_type is the customer's,
+  // so the normal end-user overview renders.
+  if (user.company_type === 'installer' && !user.impersonation) {
+    return <Navigate to="/app/customers" replace />;
+  }
 
   return (
     <>

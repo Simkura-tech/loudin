@@ -29,6 +29,8 @@ import {
 import { peopleGroupsApi, type PeopleGroup } from '../../services/access/peopleGroups';
 import GroupPicker from '../../components/people/GroupPicker';
 import GroupMenu from '../../components/people/GroupMenu';
+import InviteUserDialog from '../../components/people/InviteUserDialog';
+import { useAuth } from '../../contexts/AuthContext';
 
 const STATUSES: PersonStatus[] = ['active', 'inactive', 'suspended'];
 
@@ -74,6 +76,35 @@ const PrimaryButton = styled.button`
     background: ${({ theme }) => theme.colors.brand.primaryHover ?? theme.colors.brand.primary};
   }
   &:disabled { opacity: 0.6; cursor: not-allowed; }
+`;
+
+const HeaderActions = styled.div`
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+`;
+
+/* Outlined sibling of PrimaryButton for the secondary header action. */
+const OutlineButton = styled.button`
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  height: 34px;
+  padding: 0 14px;
+  border-radius: 8px;
+  border: 1px solid ${({ theme }) => theme.colors.border.light};
+  background: ${({ theme }) => theme.colors.background.primary};
+  color: ${({ theme }) => theme.colors.text.primary};
+  font-size: 13px;
+  font-weight: 600;
+  font-family: inherit;
+  cursor: pointer;
+  transition: background 0.15s ease;
+
+  &:hover {
+    background: ${({ theme }) => theme.colors.background.secondary};
+  }
 `;
 
 const Toolbar = styled.div`
@@ -472,6 +503,9 @@ const EMPTY_PAYLOAD: PersonPayload = {
 
 export function PeoplePage() {
   const navigate = useNavigate();
+  const { user } = useAuth();
+  const isAdmin = user?.user_type_id === 1;
+  const [inviteOpen, setInviteOpen] = useState(false);
   const [people, setPeople] = useState<Person[] | null>(null);
   const [total, setTotal] = useState(0);
   const [search, setSearch] = useState('');
@@ -646,9 +680,16 @@ export function PeoplePage() {
             {people === null ? 'Loading…' : `${total} ${total === 1 ? 'person' : 'people'} with door access.`}
           </div>
         </div>
-        <PrimaryButton onClick={openCreate}>
-          <IconPlus size={16} /> Add person
-        </PrimaryButton>
+        <HeaderActions>
+          {isAdmin && (
+            <OutlineButton type="button" onClick={() => setInviteOpen(true)} title="Invite someone who can sign in and manage this workspace">
+              <IconUserPlus size={16} /> Invite user
+            </OutlineButton>
+          )}
+          <PrimaryButton onClick={openCreate}>
+            <IconPlus size={16} /> Add person
+          </PrimaryButton>
+        </HeaderActions>
       </PageHeader>
 
       {error && <ErrorBanner role="alert">{error}</ErrorBanner>}
@@ -882,6 +923,10 @@ export function PeoplePage() {
             </form>
           </Dialog>
         </Backdrop>
+      )}
+
+      {inviteOpen && (
+        <InviteUserDialog onClose={() => setInviteOpen(false)} currentUserId={user?.id} />
       )}
 
       {deleteTarget && (

@@ -32,7 +32,9 @@ const { recordAudit } = require('../../services/platform/audit');
 const ADMIN_USER_TYPE_ID = 1;
 // Public self-serve signup creates end-user companies only. The platform
 // company is seeded, not signed up.
-const ALLOWED_SIGNUP_COMPANY_TYPES = ['end_user'];
+// Public self-signup creates a customer (end_user) or an installer company.
+// The platform company is seeded; it is never created through signup.
+const ALLOWED_SIGNUP_COMPANY_TYPES = ['end_user', 'installer'];
 
 function badRequest(res, message, details) {
   return res.status(400).json({ error: 'Bad Request', message, ...(details && { details }) });
@@ -128,6 +130,11 @@ async function register(req, res, next) {
     // still gets a company (the tenant), just with a derived placeholder name
     // (see companyName resolution below).
     const trimmedCompanyName = String(companyName || '').trim();
+    // Installers are a business other companies pick from a list and grant
+    // door access to, so a placeholder name is never acceptable for them.
+    if (companyType === 'installer' && !trimmedCompanyName) {
+      return badRequest(res, 'Company name is required for an installer account');
+    }
     // Every signup must accept the Terms + Privacy Policy (one checkbox in
     // the UI; the server records both versions separately).
     if (terms_accepted !== true) {

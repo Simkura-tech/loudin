@@ -35,6 +35,7 @@ import {
   type CompanyType,
   type CompanyUser,
 } from '../../services/platform/companies';
+import CompanyInstallerAccess from '../../components/platform/CompanyInstallerAccess';
 
 const BackLink = styled(Link)`
   display: inline-flex;
@@ -96,11 +97,13 @@ const TypePill = styled.span<{ $type: CompanyType }>`
   font-weight: 600;
   text-transform: capitalize;
   background: ${({ $type }) =>
-    $type === 'platform' ? '#dbeafe'
-  :                        '#f1f5f9'};
+    $type === 'platform'  ? '#dbeafe'
+  : $type === 'installer' ? '#e0e7ff'
+  :                         '#f1f5f9'};
   color: ${({ $type }) =>
-    $type === 'platform' ? '#1e40af'
-  :                        '#475569'};
+    $type === 'platform'  ? '#1e40af'
+  : $type === 'installer' ? '#3730a3'
+  :                         '#475569'};
 `;
 
 const StatusPill = styled.span<{ $status: CompanyStatus }>`
@@ -871,6 +874,9 @@ export function CompanyDetailPage() {
           </tbody>
         </InlineTable>
       </Drawer>
+
+      {/* Installer relationship: grants on a customer, or an installer's customers. */}
+      <CompanyInstallerAccess key={company.id} company={company} />
 
       {modal && (
         <Backdrop onMouseDown={(e) => { if (e.target === e.currentTarget) closeModal(); }}>

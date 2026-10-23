@@ -4,7 +4,8 @@
  * Conventions
  * - Two user types: Admin (1), User (2). What kind of admin (platform admin,
  *   end-user admin) is determined by company.company_type.
- * - Two company types: 'platform', 'end_user'.
+ * - Three company types: 'platform', 'end_user', and the optional 'installer'
+ *   (a cross-company technician business; access to customers is by grant).
  * - Door-access credential holders live in `people` (separate from `users`).
  */
 
@@ -39,6 +40,7 @@ export interface User {
 export const COMPANY_TYPES = {
   PLATFORM: 'platform',
   END_USER: 'end_user',
+  INSTALLER: 'installer',
 } as const;
 
 export type CompanyType = typeof COMPANY_TYPES[keyof typeof COMPANY_TYPES];

@@ -9,9 +9,11 @@
  *   - Impersonation / multi-company-switching handling (removed in rewrite)
  */
 
-const { verifyToken } = require('../../utils/jwt');
-const { getAuthToken } = require('../../utils/authCookie');
+const { verifyToken, generateToken } = require('../../utils/jwt');
+const { getAuthToken, setAuthCookie, clearAuthCookie } = require('../../utils/authCookie');
 const { runAuthGates } = require('../../extensions');
+const { query } = require('../../database/db');
+const installers = require('../../services/tenancy/installers');
 
 function attachUser(decoded, req) {
   req.user = {
@@ -42,6 +44,44 @@ function attachUser(decoded, req) {
 }
 
 /**
+ * Installer service sessions (controllers/tenancy/installers.js) are only
+ * valid while the customer's grant stands. Revoking a grant must end live
+ * sessions immediately, so every request inside one re-checks the grant
+ * (one indexed query). When it is gone, the caller is dropped back into
+ * their own workspace: the cookie is swapped for a normal home-company
+ * token and the request fails with SERVICE_SESSION_ENDED so the client can
+ * reload into /app.
+ *
+ * Returns true when the request may proceed; false when a response was sent.
+ */
+async function enforceServiceSession(req, res) {
+  const imp = req.impersonation;
+  if (!imp || imp.impersonator_company_type !== 'installer') return true;
+  if (await installers.hasActiveGrant(imp.impersonator_company_id, req.user.company_id)) return true;
+
+  const { rows: [u] } = await query(
+    `SELECT u.id, u.email, u.user_type_id, u.company_id, c.company_type
+       FROM users u JOIN companies c ON c.id = u.company_id
+      WHERE u.id = $1 AND u.deleted_at IS NULL`,
+    [imp.impersonator_user_id]
+  );
+  if (u) {
+    setAuthCookie(res, generateToken({
+      user_id: u.id, company_id: u.company_id, user_type_id: u.user_type_id,
+      email: u.email, company_type: u.company_type,
+    }));
+  } else {
+    clearAuthCookie(res);
+  }
+  res.status(403).json({
+    error: 'Forbidden',
+    code:  'SERVICE_SESSION_ENDED',
+    message: 'Access to this workspace was revoked. You have been returned to your own workspace.',
+  });
+  return false;
+}
+
+/**
  * Require a valid token. Rejects with 401 if missing or invalid.
  */
 async function authenticate(req, res, next) {
@@ -60,6 +100,11 @@ async function authenticate(req, res, next) {
       error: 'Authentication failed',
       message: err.message,
     });
+  }
+  try {
+    if (!(await enforceServiceSession(req, res))) return undefined;
+  } catch (err) {
+    return next(err);
   }
   // Extension authGates (e.g. a billing extension blocking a lapsed tenant)
   // run after the session is established. No extensions → straight to next().

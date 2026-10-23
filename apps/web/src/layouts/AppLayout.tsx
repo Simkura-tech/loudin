@@ -20,6 +20,7 @@ import {
   IconSettings,
   IconLogout,
   IconChevronDown,
+  IconTool,
 } from '@tabler/icons-react';
 import { useAuth } from '../contexts/AuthContext';
 import { workspaceApi } from '../services/tenancy/workspace';
@@ -101,8 +102,9 @@ const CompanyBadge = styled.div`
 `;
 
 const COMPANY_TYPE_BADGE: Record<string, { label: string; bg: string; fg: string }> = {
-  platform: { label: 'Platform', bg: '#fef3c7', fg: '#78350f' },
-  end_user: { label: 'End user', bg: '#d1fae5', fg: '#065f46' },
+  platform:  { label: 'Platform',  bg: '#fef3c7', fg: '#78350f' },
+  end_user:  { label: 'End user',  bg: '#d1fae5', fg: '#065f46' },
+  installer: { label: 'Installer', bg: '#e0e7ff', fg: '#3730a3' },
 };
 
 const TypePill = styled.span<{ $bg: string; $fg: string }>`
@@ -392,6 +394,12 @@ export function AppLayout() {
   // is naturally hidden.
   const isPlatformAdmin = !isImpersonating && user.user_type_id === 1 && user.company_type === 'platform';
   const isAdmin         = user.user_type_id === 1;
+  // An installer company's own workspace: no doors, just the customer list.
+  const isInstallerHome = !isImpersonating && user.company_type === 'installer';
+  // Inside a customer workspace on an installer service session: full admin
+  // nav (settings included); only the server-denied actions are hidden
+  // inside their own pages.
+  const isInstallerSession = isImpersonating && user.impersonation?.impersonator_company_type === 'installer';
   // Only admins can rename the workspace (PATCH /api/workspace is admin-only),
   // so only they see the prompt. Hidden while impersonating.
   const showNamePrompt = !isImpersonating && isAdmin && user.name_auto_generated && !namePromptDismissed;
@@ -438,13 +446,13 @@ export function AppLayout() {
   const handleExitImpersonation = async () => {
     setExitBusy(true);
     try {
+      const wasInstaller = isInstallerSession;
+      const impersonatedId = user.company_id; // still the customer from this closure's view
       await auth.endImpersonation();
       await refresh();
-      // Send the platform admin back to the company they were just viewing.
-      // user.company_id at this point is still the impersonated tenant
-      // (refresh hasn't applied yet from this closure's perspective).
-      const impersonatedId = user.company_id;
-      navigate(`/app/companies/${impersonatedId}`);
+      // Installers go home to their customer list; the platform admin goes
+      // back to the company they were just viewing.
+      navigate(wasInstaller ? '/app/customers' : `/app/companies/${impersonatedId}`);
     } catch {
       // If the exit fails the cookie is still impersonation-scoped — the
       // user can retry. Surface no error here; the banner stays put.
@@ -472,7 +480,41 @@ export function AppLayout() {
         </CompanyBadge>
 
         <NavList>
-          {isImpersonating ? (
+          {isInstallerHome ? (
+            // Installer home: customers + settings. Devices/People would be
+            // empty — an installer owns no doors.
+            <>
+              <NavItem to="/app/customers">
+                <IconBuilding size={18} strokeWidth={1.75} />
+                Customers
+              </NavItem>
+              {extNav.map(renderExtNavItem)}
+              <NavItem to="/app/settings">
+                <IconSettings size={18} strokeWidth={1.75} />
+                Settings
+              </NavItem>
+            </>
+          ) : isInstallerSession ? (
+            // Installer working inside a customer: the customer's full nav.
+            <>
+              <NavItem to="/app" end>
+                <IconLayoutDashboard size={18} strokeWidth={1.75} />
+                Overview
+              </NavItem>
+              <NavItem to="/app/people">
+                <IconUsers size={18} strokeWidth={1.75} />
+                People
+              </NavItem>
+              <NavItem to="/app/devices">
+                <IconLock size={18} strokeWidth={1.75} />
+                Devices
+              </NavItem>
+              <NavItem to="/app/settings">
+                <IconSettings size={18} strokeWidth={1.75} />
+                Settings
+              </NavItem>
+            </>
+          ) : isImpersonating ? (
             // While impersonating a customer, only People + Devices are
             // reachable. Settings / Billing are server-denied;
             // hiding their nav entries matches that.
@@ -596,14 +638,15 @@ export function AppLayout() {
       <Main>
         {isImpersonating && user.impersonation && (
           <ImpersonationBanner role="status">
-            <IconArrowsLeftRight className="icon" size={18} />
+            {isInstallerSession ? <IconTool className="icon" size={18} /> : <IconArrowsLeftRight className="icon" size={18} />}
             <div className="body">
               <div className="title">
-                Viewing {user.company_name} as {user.impersonation.impersonator_company_name}
+                {isInstallerSession ? 'Working in' : 'Viewing'} {user.company_name} as {user.impersonation.impersonator_company_name}
               </div>
               <div className="meta">
-                Scoped to {user.impersonation.scope.join(' and ')} only.
-                Settings aren't reachable from this view.
+                {isInstallerSession
+                  ? `You have admin access here. Everything you do is logged under ${user.impersonation.impersonator_company_name}.`
+                  : `Scoped to ${user.impersonation.scope.join(' and ')} only. Settings aren't reachable from this view.`}
               </div>
             </div>
             <button

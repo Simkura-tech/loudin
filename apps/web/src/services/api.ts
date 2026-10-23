@@ -63,6 +63,17 @@ api.interceptors.response.use(
         window.location.href = '/login';
       }
 
+      // 403 + SERVICE_SESSION_ENDED → the installer's grant was revoked
+      // mid-session. The server already swapped the cookie back to their
+      // home workspace; reload into it.
+      if (
+        error.response.status === 403 &&
+        error.response.data?.code === 'SERVICE_SESSION_ENDED'
+      ) {
+        window.location.href = '/app';
+        return Promise.reject(new Error('Access to this workspace was revoked.'));
+      }
+
       // 403 + COMPANY_SUSPENDED → log out with reason preserved for the login screen
       if (
         error.response.status === 403 &&

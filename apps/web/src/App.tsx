@@ -19,11 +19,13 @@ import NotFoundPage from './pages/marketing/NotFoundPage';
 import LoginPage from './pages/auth/LoginPage';
 import SignupPage from './pages/auth/SignupPage';
 import ForgotPasswordPage from './pages/auth/ForgotPasswordPage';
+import AcceptInvitePage from './pages/auth/AcceptInvitePage';
 import AppLayout from './layouts/AppLayout';
 import OverviewPage from './pages/app/OverviewPage';
 import DirectoryPage from './pages/app/platform/DirectoryPage';
 import CompanyDetailPage from './pages/app/CompanyDetailPage';
 import PeoplePage from './pages/app/PeoplePage';
+import CustomersPage from './pages/app/installer/CustomersPage';
 import PersonDetailPage from './pages/app/PersonDetailPage';
 import DevicesPage from './pages/app/DevicesPage';
 import DeviceDetailPage from './pages/app/DeviceDetailPage';
@@ -60,6 +62,8 @@ function App() {
             <Route path="/login" element={<LoginPage />} />
             <Route path="/forgot-password" element={<ForgotPasswordPage />} />
             <Route path="/signup" element={<SignupPage />} />
+            {/* Workspace invite link — see components/people/InviteUserDialog. */}
+            <Route path="/invite/:token" element={<AcceptInvitePage />} />
 
             <Route path="/terms"   element={<TermsPage />} />
             <Route path="/privacy" element={<PrivacyPage />} />
@@ -79,6 +83,8 @@ function App() {
               <Route path="companies"     element={<DirectoryPage />} />
               <Route path="companies/:id" element={<CompanyDetailPage />} />
               <Route path="people" element={<PeoplePage />} />
+              {/* Installer home — the customers that granted this company access. */}
+              <Route path="customers" element={<CustomersPage />} />
               <Route path="people/:id" element={<PersonDetailPage />} />
               <Route path="devices" element={<DevicesPage />} />
               <Route path="devices/:id" element={<DeviceDetailPage />} />

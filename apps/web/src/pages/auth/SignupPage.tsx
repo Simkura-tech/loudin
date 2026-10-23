@@ -1,9 +1,11 @@
 /**
  * SignupPage — public account creation.
  *
- * Self-serve for end-user companies (they use the locks). The first user of a
- * company becomes its Admin. Wired to POST /api/auth/register; the AuthContext
- * picks up the new session and the user is taken to /app.
+ * Self-serve for customers (they own and use the locks) and for installers
+ * (they service other companies' doors — see docs/company-hierarchy.md →
+ * Installers). The first user of a company becomes its Admin. Wired to
+ * POST /api/auth/register; the AuthContext picks up the new session and the
+ * user is taken to /app, which routes installers on to their Customers page.
  */
 
 import { useEffect, useState } from 'react';
@@ -11,7 +13,9 @@ import { Link, useNavigate } from 'react-router-dom';
 import styled from '@emotion/styled';
 import {
   IconArrowRight,
+  IconBuilding,
   IconMailOff,
+  IconTool,
   IconUserPlus,
 } from '@tabler/icons-react';
 import { useAuth } from '../../contexts/AuthContext';
@@ -106,6 +110,33 @@ const Form = styled.form`
   @media (max-width: 600px) {
     grid-template-columns: 1fr;
   }
+`;
+
+const TypeChoice = styled.div`
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+  @media (max-width: 480px) { grid-template-columns: 1fr; }
+`;
+
+const TypeOption = styled.label<{ $active: boolean }>`
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 12px;
+  border-radius: 10px;
+  border: 1px solid ${({ theme, $active }) => ($active ? theme.colors.brand.primary : theme.colors.border.light)};
+  background: ${({ theme, $active }) => ($active ? `${theme.colors.brand.primary}0d` : theme.colors.background.primary)};
+  color: ${({ theme }) => theme.colors.text.primary};
+  cursor: pointer;
+
+  input { position: absolute; opacity: 0; width: 0; height: 0; }
+  svg { color: ${({ theme, $active }) => ($active ? theme.colors.brand.primary : theme.colors.text.tertiary)}; }
+  .t { font-size: 13px; font-weight: 600; }
+  .d { font-size: 12px; line-height: 1.4; color: ${({ theme }) => theme.colors.text.secondary}; }
+
+  &:focus-within { box-shadow: 0 0 0 3px ${({ theme }) => theme.colors.brand.primary}26; }
 `;
 
 const FullRow = styled.div`
@@ -253,6 +284,10 @@ export function SignupPage() {
   const { register } = useAuth();
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  // Which kind of company this signup creates. Installers must name their
+  // business — customers pick it from a list when granting door access.
+  const [companyType, setCompanyType] = useState<'end_user' | 'installer'>('end_user');
+  const isInstaller = companyType === 'installer';
 
   // ── Instance signup toggle ──────────────────────────────────────────────────
   // Private ("own doors") deployments close open self-signup. null while the
@@ -285,7 +320,7 @@ export function SignupPage() {
         email:       String(data.get('email')     || ''),
         password:    String(data.get('password')  || ''),
         companyName: String(data.get('companyName') || ''),
-        companyType: 'end_user',
+        companyType,
         // The form's `required` attribute on the checkbox guarantees this
         // is checked before submit reaches here.
         terms_accepted: true,
@@ -340,6 +375,24 @@ export function SignupPage() {
 
               {showForm && (
                 <Form onSubmit={handleSubmit}>
+                  <FullRow>
+                    <TypeChoice role="radiogroup" aria-label="What kind of company is this?">
+                      <TypeOption $active={!isInstaller}>
+                        <input type="radio" name="companyType" value="end_user"
+                               checked={!isInstaller} onChange={() => setCompanyType('end_user')} />
+                        <IconBuilding size={18} strokeWidth={1.75} />
+                        <span className="t">I own doors</span>
+                        <span className="d">Manage locks, people and schedules for my own company.</span>
+                      </TypeOption>
+                      <TypeOption $active={isInstaller}>
+                        <input type="radio" name="companyType" value="installer"
+                               checked={isInstaller} onChange={() => setCompanyType('installer')} />
+                        <IconTool size={18} strokeWidth={1.75} />
+                        <span className="t">I install doors for others</span>
+                        <span className="d">Deploy and service systems in customers&apos; workspaces.</span>
+                      </TypeOption>
+                    </TypeChoice>
+                  </FullRow>
                   <Field>
                     <FieldLabel>First name</FieldLabel>
                     <Input
@@ -386,14 +439,19 @@ export function SignupPage() {
                   </FullRow>
                   <FullRow>
                     <Field>
-                      <FieldLabel>Company name (optional)</FieldLabel>
+                      <FieldLabel>{isInstaller ? 'Company name' : 'Company name (optional)'}</FieldLabel>
                       <Input
                         type="text"
                         name="companyName"
                         autoComplete="organization"
-                        placeholder="Your company or team"
+                        placeholder={isInstaller ? 'Your installation business' : 'Your company or team'}
+                        required={isInstaller}
                       />
-                      <Hint>Leave blank and we&apos;ll set up a personal workspace you can rename later.</Hint>
+                      <Hint>
+                        {isInstaller
+                          ? 'Customers choose your company by this name when they grant you access to their doors.'
+                          : 'Leave blank and we’ll set up a personal workspace you can rename later.'}
+                      </Hint>
                     </Field>
                   </FullRow>
 

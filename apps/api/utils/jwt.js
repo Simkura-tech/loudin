@@ -51,6 +51,21 @@ function generateImpersonationToken(payload) {
   );
 }
 
+/**
+ * Installer service session (controllers/tenancy/installers.js). Same payload
+ * as the session token plus an `impersonation` block naming the installer.
+ * Longer than impersonation's 1h because a technician is on site for a
+ * shift; still shorter than a normal 24h login. SERVICE_SESSION_EXPIRE
+ * overrides.
+ */
+function generateServiceSessionToken(payload) {
+  return jwt.sign(
+    payload,
+    JWT_SECRET,
+    { expiresIn: process.env.SERVICE_SESSION_EXPIRE || '8h', issuer: ISSUER, audience: AUDIENCE }
+  );
+}
+
 function verifyToken(token) {
   try {
     return jwt.verify(token, JWT_SECRET, {
@@ -131,6 +146,7 @@ function verifyPending2faToken(token) {
 }
 
 module.exports = {
+  generateServiceSessionToken,
   generateToken,
   generateImpersonationToken,
   verifyToken,

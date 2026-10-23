@@ -136,6 +136,7 @@ app.use('/api/people-groups', require('./routes/client/peopleGroups'));
 app.use('/api/credentials',   require('./routes/client/credentials'));
 app.use('/api/devices',       require('./routes/client/devices'));
 app.use('/api/features',      require('./routes/client/features'));
+app.use('/api/installer',     require('./routes/client/installer'));
 
 // ── Internal routes (/internal/*) — platform-admin only, firewallable ────
 app.use('/internal/platform',  require('./routes/internal/platform'));

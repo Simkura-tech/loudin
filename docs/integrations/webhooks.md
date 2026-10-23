@@ -68,7 +68,8 @@ a failure and retried.
 
 | Event `type` | Extra payload | Fires when |
 |--------------|---------------|------------|
-| `company.signed_up` | — | a company self-registers |
+| `company.signed_up` | — | a company self-registers (`company.type` is `end_user` or `installer`) |
+| `company.created` | `source` (`platform` or `installer`), `installer.{ company_id, name }` when an installer did it | a platform admin provisions a company (`company.type` is `end_user` or `installer`), or an installer admin provisions a new customer, and its first admin is invited |
 | `company.first_person_added` | `person.person_id` | the company's first credential holder is created |
 | `company.subscription_cancelled` | `cancellation.{ reason_code, cancel_effective_at }` | a company admin schedules their workspace's cancellation |
 | `company.cancellation_undone` | — | the company admin withdraws that scheduled cancellation |
@@ -79,6 +80,8 @@ a failure and retried.
 | `device.offline_extended` | `device.{ device_id, last_seen, offline_hours }` | a claimed device hasn't been seen for `SIMKURA_OFFLINE_ALERT_HOURS` (default 48) — once per offline episode |
 | `device.battery_dead` | `device.{ device_id, battery_percent? }` | a claimed device's battery died — the lock is in safe mode and **cannot actuate** (relayed from Simkura's `health.battery_dead`, once per episode) |
 | `device.battery_recovered` | `device.{ device_id, battery_percent? }` | the matching all-clear after a battery swap/recharge |
+| `installer.granted` | `installer.{ company_id, name }`, `source` (`customer`, `platform`, or `installer` when the installer created the customer) | an installer company is granted access to this customer's workspace — `company` is the customer |
+| `installer.revoked` | `installer.{ company_id, name }`, `source` | that access is withdrawn. Installer revenue share is not computed by Loudin; subscribe to these two events to drive it from your billing system |
 
 Door/access (`device_events`) subscriptions are deferred (higher volume).
 

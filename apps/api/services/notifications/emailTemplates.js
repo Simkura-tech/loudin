@@ -131,7 +131,46 @@ function opsAlertEmail({ subject, body }) {
   };
 }
 
+/**
+ * Build the email payload for a workspace invite. Returns { subject, text, html }.
+ *
+ * @param {object} p
+ * @param {string|null} p.inviterName
+ * @param {string}      p.companyName
+ * @param {string}      p.acceptUrl     — single-use link to /invite/:token
+ * @param {string|Date} p.expiresAt
+ */
+function inviteEmail({ inviterName, companyName, acceptUrl, expiresAt }) {
+  const who   = inviterName ? `${inviterName} has invited you` : 'You have been invited';
+  const until = expiresAt ? new Date(expiresAt).toUTCString() : null;
+  const subject   = `You're invited to ${companyName} on Loudin`;
+  const preheader = `${who} to manage ${companyName} on Loudin.`;
+  const footer    = until
+    ? `This link can be used once and expires ${until}. If you weren't expecting this, you can ignore it.`
+    : `This link can be used once. If you weren't expecting this, you can ignore it.`;
+
+  const html = shell({
+    preheader,
+    bodyHtml: `
+      <p style="margin:0 0 8px;">${escapeHtml(who)} to <strong>${escapeHtml(companyName)}</strong> on Loudin.</p>
+      <p style="margin:0 0 20px;color:${TEXT_DIM};">Accept the invite to set your password and start managing doors, people and credentials.</p>
+      <div style="margin:0 0 20px;text-align:center;">
+        <a href="${escapeHtml(acceptUrl)}" style="display:inline-block;padding:12px 22px;border-radius:10px;background:${ACCENT};color:#ffffff;font-weight:600;text-decoration:none;">Accept invite</a>
+      </div>
+      <p style="margin:0 0 8px;color:${TEXT_DIM};font-size:13px;">Or paste this link into your browser:<br>
+        <a href="${escapeHtml(acceptUrl)}" style="color:${ACCENT};word-break:break-all;">${escapeHtml(acceptUrl)}</a></p>
+      <p style="margin:0;color:${TEXT_DIM};font-size:13px;">${escapeHtml(footer)}</p>
+    `,
+  });
+  const text =
+    `${who} to ${companyName} on Loudin.\n\n` +
+    `Accept the invite to set your password:\n${acceptUrl}\n\n` +
+    `${footer}\n\n— Loudin`;
+  return { subject, text, html };
+}
+
 module.exports = {
   otpEmail,
   opsAlertEmail,
+  inviteEmail,
 };

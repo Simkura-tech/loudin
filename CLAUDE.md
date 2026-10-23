@@ -45,14 +45,17 @@ Two user types. What kind of admin a user is (platform / end-user) is determined
 | 1 | **Admin** | Company-scoped — UI / permissions depend on `company.company_type` |
 | 2 | **User** | Regular logged-in user (non-admin) |
 
-**Company types** (`companies.company_type`) — there are exactly two:
+**Company types** (`companies.company_type`) — there are exactly three:
 
 - `platform` — the platform operator (a software provider/integrator, or a single company running its own doors). An Admin here is the "platform admin", who administers every end-user company directly.
 - `end_user` — Customer companies that own and use the locks.
+- `installer` — Optional. A cross-company technician business that services many customers' doors but owns none. Created by public signup (type picker) or by the platform admin. Access is by grant (`installer_grants`, migration `092`), revocable by the customer or the platform; installer Admins can also provision a new customer (`POST /api/installer/customers`, pre-granted); installer users work inside a customer via a **service session** (the token carries an `impersonation` block naming the installer; `req.user.company_id` is the customer). See `docs/company-hierarchy.md` → Installers.
 
-There is **no reseller tier** — it was removed in migration `090_remove_reseller_type.sql`. The `companies.parent_company_id` / `parent_locked_at` columns remain but are unused (always NULL), reserved for a possible future parent/child relationship.
+There is **no reseller tier** — it was removed in migration `090_remove_reseller_type.sql`; installers are a grant relationship, not a parent. The `companies.parent_company_id` / `parent_locked_at` columns remain but are unused (always NULL), reserved for a possible future parent/child relationship.
 
 Door-access **credential holders** (people who just need a PIN or card to open a door, with no software login) live in the `people` table, not `users`.
+
+Additional **login users** are added to an existing company by invite (`user_invites` table, `services/auth/invites.js`): an Admin posts to `/api/workspace/invites`, the invitee accepts at `/invite/:token`. Every other user-creation path (register, Google, `create-admin.js`) creates a new company.
 
 ---
 

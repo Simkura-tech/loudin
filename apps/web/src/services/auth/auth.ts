@@ -8,7 +8,7 @@
 
 import api from '../api';
 
-export type CompanyType = 'platform' | 'end_user';
+export type CompanyType = 'platform' | 'end_user' | 'installer';
 
 /** When the active session is a platform admin acting "as" a customer, the
  *  /me response includes this block. Fields describe the actor's home
@@ -68,8 +68,9 @@ export interface RegisterPayload {
   email: string;
   password: string;
   companyName: string;
-  /** Public self-signup creates end-user companies only. */
-  companyType: 'end_user';
+  /** Public self-signup creates a customer (end_user) or an installer
+   *  company; companyName is required for installers. */
+  companyType: 'end_user' | 'installer';
   /** Required for every signup — confirms the ToS + Privacy Policy were accepted. */
   terms_accepted: true;
 }

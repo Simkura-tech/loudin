@@ -4,7 +4,7 @@
 
 import api from '../api';
 
-export type CompanyType = 'platform' | 'end_user';
+export type CompanyType = 'platform' | 'end_user' | 'installer';
 export type CompanyStatus = 'active' | 'inactive' | 'suspended' | 'canceled';
 
 /** Notification preference toggles. Server stores as JSONB; unknown keys

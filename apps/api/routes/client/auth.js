@@ -1,4 +1,4 @@
-﻿/**
+/**
  * /api/auth — register, login, logout, me.
  *
  * Rate-limits the unauthenticated entry points (register + login) so they
@@ -23,6 +23,7 @@ const {
   endImpersonation,
 } = require('../../controllers/auth/auth');
 const { redirectToGoogle, handleCallback } = require('../../controllers/auth/googleAuth');
+const invitesCtrl = require('../../controllers/auth/invites');
 const { authenticate } = require('../../middleware/core/auth');
 
 const router = express.Router();
@@ -45,6 +46,11 @@ router.post('/verify-2fa',       authAttemptLimiter, verify2fa);
 router.post('/forgot-password',  authAttemptLimiter, forgotPassword);
 router.post('/reset-password',   authAttemptLimiter, resetPassword);
 router.post('/logout',           logout);
+
+// Workspace invites — the token in the URL is the credential, so both sit
+// behind the same limiter as login/register (controllers/auth/invites.js).
+router.get ('/invites/:token',        authAttemptLimiter, invitesCtrl.preview);
+router.post('/invites/:token/accept', authAttemptLimiter, invitesCtrl.accept);
 router.get ('/me',               authenticate, me);
 router.post('/end-impersonation', authenticate, endImpersonation);
 
