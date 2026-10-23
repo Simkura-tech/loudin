@@ -25,6 +25,7 @@ import OverviewPage from './pages/app/OverviewPage';
 import DirectoryPage from './pages/app/platform/DirectoryPage';
 import CompanyDetailPage from './pages/app/CompanyDetailPage';
 import PeoplePage from './pages/app/PeoplePage';
+import UsersPage from './pages/app/UsersPage';
 import CustomersPage from './pages/app/installer/CustomersPage';
 import PersonDetailPage from './pages/app/PersonDetailPage';
 import DevicesPage from './pages/app/DevicesPage';
@@ -62,7 +63,7 @@ function App() {
             <Route path="/login" element={<LoginPage />} />
             <Route path="/forgot-password" element={<ForgotPasswordPage />} />
             <Route path="/signup" element={<SignupPage />} />
-            {/* Workspace invite link — see components/people/InviteUserDialog. */}
+            {/* Workspace invite link — sent from the Users page (components/people/InviteUserDialog). */}
             <Route path="/invite/:token" element={<AcceptInvitePage />} />
 
             <Route path="/terms"   element={<TermsPage />} />
@@ -83,6 +84,8 @@ function App() {
               <Route path="companies"     element={<DirectoryPage />} />
               <Route path="companies/:id" element={<CompanyDetailPage />} />
               <Route path="people" element={<PeoplePage />} />
+              {/* Login users — declared before people/:id so "users" isn't read as an id. */}
+              <Route path="people/users" element={<UsersPage />} />
               {/* Installer home — the customers that granted this company access. */}
               <Route path="customers" element={<CustomersPage />} />
               <Route path="people/:id" element={<PersonDetailPage />} />

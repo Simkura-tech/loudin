@@ -11,12 +11,13 @@
  */
 
 const invites = require('../../services/auth/invites');
+const members = require('../../services/auth/members');
 const { deliverInvite } = require('../../services/auth/inviteDelivery');
 const { recordAudit } = require('../../services/platform/audit');
 const { query } = require('../../database/db');
 
 function sendInviteError(res, err) {
-  if (err instanceof invites.InviteError) {
+  if (err instanceof invites.InviteError || err instanceof members.MemberError) {
     return res.status(err.status).json({ error: err.code, code: err.code, message: err.message });
   }
   return null;
@@ -133,4 +134,60 @@ async function revoke(req, res, next) {
   }
 }
 
-module.exports = { list, create, resend, revoke };
+// ── PATCH /api/workspace/members/:id ──────────────────────────────────────────
+// Body: { role?: 'admin' | 'user', status?: 'active' | 'inactive' }
+//
+// Guards (services/auth/members.js): not yourself, not the last active admin.
+// A deactivated user's live session ends on their next request.
+async function update(req, res, next) {
+  try {
+    const { role, status } = req.body || {};
+    const { member, changes } = await members.updateMember({
+      companyId:   req.user.company_id,
+      actorUserId: req.user.user_id,
+      userId:      req.params.id,
+      role,
+      status,
+    });
+
+    if (changes.role) {
+      recordAudit(req, 'user.role_changed', {
+        target_type: 'user', target_id: member.id,
+        metadata: { email: member.email, from: changes.role.from, to: changes.role.to },
+      });
+    }
+    if (changes.status) {
+      recordAudit(req, changes.status.to === 'active' ? 'user.reactivated' : 'user.deactivated', {
+        target_type: 'user', target_id: member.id,
+        metadata: { email: member.email, from: changes.status.from, to: changes.status.to },
+      });
+    }
+
+    return res.json({ member });
+  } catch (err) {
+    if (sendInviteError(res, err)) return undefined;
+    return next(err);
+  }
+}
+
+// ── DELETE /api/workspace/members/:id ─────────────────────────────────────────
+// Soft delete. The address can be invited again afterwards (migration 093).
+async function remove(req, res, next) {
+  try {
+    const member = await members.removeMember({
+      companyId:   req.user.company_id,
+      actorUserId: req.user.user_id,
+      userId:      req.params.id,
+    });
+    recordAudit(req, 'user.removed', {
+      target_type: 'user', target_id: member.id,
+      metadata: { email: member.email, role: member.role },
+    });
+    return res.status(204).end();
+  } catch (err) {
+    if (sendInviteError(res, err)) return undefined;
+    return next(err);
+  }
+}
+
+module.exports = { list, create, resend, revoke, update, remove };

@@ -35,6 +35,8 @@ router.get   ('/members',             requireAdmin, members.list);
 router.post  ('/invites',             requireAdmin, denyImpersonation, members.create);
 router.post  ('/invites/:id/resend',  requireAdmin, denyImpersonation, members.resend);
 router.delete('/invites/:id',         requireAdmin, denyImpersonation, members.revoke);
+router.patch ('/members/:id',         requireAdmin, denyImpersonation, members.update);
+router.delete('/members/:id',         requireAdmin, denyImpersonation, members.remove);
 
 // Installer access — which installer companies may work in this workspace
 // (controllers/tenancy/installers.js → workspace.*).

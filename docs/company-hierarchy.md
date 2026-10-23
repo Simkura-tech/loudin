@@ -80,11 +80,18 @@ people.
 
 A workspace's first user is created with the company (signup, Google
 sign-in, or `scripts/create-admin.js`). Further users are added by
-**invite**: an Admin opens People → **Invite user**, enters an email, and
-Loudin emails a single-use link (`/invite/:token`, valid 7 days) where the
-invitee sets a password and lands signed in to the same company. Invited
-users join as Admins by default; the API (`POST /api/workspace/invites`)
-also accepts `role: "user"` for a read-only login. Only a hash of the token
+**invite**: an Admin opens People → **Users** → **Invite user**, enters an
+email, picks a role (Admin, or User for a read-only login), and Loudin emails
+a single-use link (`/invite/:token`, valid 7 days) where the invitee sets a
+password and lands signed in to the same company. The Users view
+(`/app/people/users`, admin-only) lists everyone who can sign in alongside
+pending invites, with resend / revoke. From the same table an Admin can
+change another user's role, deactivate / reactivate them, or remove them
+(`PATCH` / `DELETE /api/workspace/members/:id`). You can't do any of that to
+yourself, and the last active Admin can't be demoted, deactivated or removed.
+A deactivated or removed user is signed out on their next request: the auth
+middleware re-reads the user row per request rather than trusting the token
+until it expires. Only a hash of the token
 is stored, and the inviting Admin gets the link back in the response so
 instances without an email provider can still onboard users by sharing it.
 

@@ -10,6 +10,8 @@
 import api from '../api';
 
 export type MemberRole = 'admin' | 'user';
+/** The statuses an admin can set. The server also has system-owned ones. */
+export type MemberStatus = 'active' | 'inactive';
 export type InviteState = 'pending' | 'expired' | 'revoked' | 'accepted';
 
 export interface Member {
@@ -50,6 +52,11 @@ export interface InvitePayload {
   role?: MemberRole;
 }
 
+export interface MemberUpdatePayload {
+  role?: MemberRole;
+  status?: MemberStatus;
+}
+
 /** Returned by create + resend. accept_url is shown to the inviter only. */
 export interface InviteResult {
   invite: Invite;
@@ -71,4 +78,15 @@ export const membersApi = {
 
   revoke: (inviteId: number) =>
     api.delete<{ invite: Invite }, { invite: Invite }>(`/api/workspace/invites/${inviteId}`),
+
+  /**
+   * Change a user's role and/or status. The server refuses to touch the
+   * caller's own account (SELF_TARGET) or the last active admin (LAST_ADMIN).
+   */
+  update: (userId: number, payload: MemberUpdatePayload) =>
+    api.patch<{ member: Member }, { member: Member }>(`/api/workspace/members/${userId}`, payload),
+
+  /** Soft-delete a user. Same guards as update. */
+  remove: (userId: number) =>
+    api.delete<void, void>(`/api/workspace/members/${userId}`),
 };

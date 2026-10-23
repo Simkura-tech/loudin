@@ -1,35 +1,34 @@
 /**
  * InviteUserDialog — add a login user to the current workspace.
  *
- * Opened from the People page next to "Add person". People hold door
+ * Opened from the Users page (/app/people/users). People hold door
  * credentials; users can sign in and manage the workspace — the dialog
- * spells that out so admins pick the right button.
+ * spells that out so admins pick the right surface.
  *
- * Two halves:
- *   1. The invite form (email + optional name). On success the dialog shows
- *      the delivery outcome and a copyable accept link — the link matters
- *      when the instance has no email provider configured.
- *   2. "Who can sign in": current users plus pending invites, with resend /
- *      revoke per invite, so the admin can see the result of what they did
- *      without leaving the page.
+ * The form takes an email, optional name, and the role the new login gets:
+ *   - Admin: full control of the workspace (what every invite used to be).
+ *   - User:  can sign in and look around, but every write route is
+ *            requireAdmin on the server, so they can't change anything.
+ *
+ * On success the dialog shows the delivery outcome and a copyable accept
+ * link — the link matters when the instance has no email provider
+ * configured. The list of who can sign in, and resend / revoke per invite,
+ * lives on the Users page table, which `onInvited` tells to refresh.
  */
 
-import { useCallback, useEffect, useState } from 'react';
+import { useState } from 'react';
 import styled from '@emotion/styled';
 import {
   IconX,
   IconSend,
   IconCopy,
   IconCheck,
-  IconRefresh,
-  IconTrash,
   IconMailForward,
 } from '@tabler/icons-react';
 import {
   membersApi,
-  type Invite,
-  type Member,
   type InviteResult,
+  type MemberRole,
 } from '../../services/tenancy/members';
 
 // ── Styles (mirror the People page dialog) ────────────────────────────────────
@@ -71,10 +70,6 @@ const DialogHeader = styled.div`
 
 const Section = styled.div`
   padding: 14px 18px;
-
-  & + & {
-    border-top: 1px solid ${({ theme }) => theme.colors.border.light};
-  }
 `;
 
 const Intro = styled.p`
@@ -122,6 +117,47 @@ const Input = styled.input`
     outline: none;
     border-color: ${({ theme }) => theme.colors.brand.primary};
     box-shadow: 0 0 0 3px ${({ theme }) => theme.colors.brand.primary}26;
+  }
+`;
+
+/* Role picker: two radio cards so the difference is read before it's chosen. */
+const RoleOptions = styled.div`
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+
+  @media (max-width: 480px) {
+    grid-template-columns: 1fr;
+  }
+`;
+
+const RoleOption = styled.label<{ $checked: boolean }>`
+  display: flex;
+  gap: 10px;
+  align-items: flex-start;
+  padding: 10px 12px;
+  border-radius: 8px;
+  border: 1px solid ${({ theme, $checked }) =>
+    $checked ? theme.colors.brand.primary : theme.colors.border.light};
+  background: ${({ theme, $checked }) =>
+    $checked ? `${theme.colors.brand.primary}0d` : theme.colors.background.primary};
+  cursor: pointer;
+  transition: border-color 0.15s ease, background 0.15s ease;
+
+  input {
+    margin: 2px 0 0;
+    accent-color: ${({ theme }) => theme.colors.brand.primary};
+  }
+  .title {
+    font-size: 13px;
+    font-weight: 600;
+    color: ${({ theme }) => theme.colors.text.primary};
+  }
+  .desc {
+    font-size: 12px;
+    line-height: 1.4;
+    color: ${({ theme }) => theme.colors.text.secondary};
+    margin-top: 2px;
   }
 `;
 
@@ -192,12 +228,6 @@ const IconButton = styled.button`
     background: ${({ theme }) => theme.colors.background.secondary};
     color: ${({ theme }) => theme.colors.text.primary};
   }
-  &.danger:hover {
-    background: #fef2f2;
-    color: #b91c1c;
-    border-color: #fecaca;
-  }
-  &:disabled { opacity: 0.5; cursor: not-allowed; }
 `;
 
 const ErrorBanner = styled.div`
@@ -242,96 +272,7 @@ const LinkRow = styled.div`
   }
 `;
 
-const SectionTitle = styled.h3`
-  margin: 0 0 8px;
-  font-size: 12px;
-  font-weight: 600;
-  letter-spacing: 0.04em;
-  text-transform: uppercase;
-  color: ${({ theme }) => theme.colors.text.secondary};
-`;
-
-const List = styled.ul`
-  list-style: none;
-  margin: 0;
-  padding: 0;
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
-`;
-
-const Row = styled.li`
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 12px;
-  padding: 8px 10px;
-  border: 1px solid ${({ theme }) => theme.colors.border.light};
-  border-radius: 8px;
-  font-size: 13px;
-
-  .who {
-    min-width: 0;
-    display: flex;
-    flex-direction: column;
-    gap: 1px;
-  }
-  .name {
-    font-weight: 500;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-  }
-  .meta {
-    font-size: 12px;
-    color: ${({ theme }) => theme.colors.text.secondary};
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-  }
-  .actions {
-    display: flex;
-    gap: 6px;
-    flex-shrink: 0;
-  }
-`;
-
-const Badge = styled.span<{ tone?: 'neutral' | 'warn' | 'muted' }>`
-  display: inline-block;
-  padding: 1px 7px;
-  border-radius: 999px;
-  font-size: 11px;
-  font-weight: 600;
-  margin-left: 6px;
-  vertical-align: middle;
-  background: ${({ tone }) =>
-    tone === 'warn' ? '#fef3c7' : tone === 'muted' ? '#f1f5f9' : '#e0e7ff'};
-  color: ${({ tone }) =>
-    tone === 'warn' ? '#92400e' : tone === 'muted' ? '#475569' : '#3730a3'};
-`;
-
-const Empty = styled.div`
-  font-size: 13px;
-  color: ${({ theme }) => theme.colors.text.tertiary};
-  padding: 6px 0;
-`;
-
 // ── Helpers ───────────────────────────────────────────────────────────────────
-
-function daysUntil(iso: string): number {
-  return Math.ceil((new Date(iso).getTime() - Date.now()) / 86_400_000);
-}
-
-function expiryLabel(invite: Invite): string {
-  if (invite.state === 'expired') return 'Expired';
-  const d = daysUntil(invite.expires_at);
-  if (d <= 0) return 'Expires today';
-  return `Expires in ${d} day${d === 1 ? '' : 's'}`;
-}
-
-function roleLabel(role: 'admin' | 'user'): string {
-  return role === 'admin' ? 'Admin' : 'User';
-}
 
 async function copyToClipboard(text: string): Promise<boolean> {
   try {
@@ -342,40 +283,36 @@ async function copyToClipboard(text: string): Promise<boolean> {
   }
 }
 
+const ROLE_OPTIONS: { value: MemberRole; title: string; desc: string }[] = [
+  {
+    value: 'admin',
+    title: 'Admin',
+    desc: 'Full control: doors, people, credentials, schedules, users and workspace settings.',
+  },
+  {
+    value: 'user',
+    title: 'User',
+    desc: 'Can sign in and view doors, people and activity, but cannot change anything.',
+  },
+];
+
 // ── Component ─────────────────────────────────────────────────────────────────
 
 interface Props {
   onClose: () => void;
-  /** The signed-in admin's user id — used to label "You" in the list. */
-  currentUserId?: number;
+  /** Called after an invite is created, so the caller can refresh its list. */
+  onInvited?: (result: InviteResult) => void;
 }
 
-export default function InviteUserDialog({ onClose, currentUserId }: Props) {
+export default function InviteUserDialog({ onClose, onInvited }: Props) {
   const [email, setEmail] = useState('');
   const [firstName, setFirstName] = useState('');
   const [lastName, setLastName] = useState('');
+  const [role, setRole] = useState<MemberRole>('admin');
   const [sending, setSending] = useState(false);
   const [formError, setFormError] = useState<string | null>(null);
   const [result, setResult] = useState<InviteResult | null>(null);
   const [copied, setCopied] = useState(false);
-
-  const [members, setMembers] = useState<Member[] | null>(null);
-  const [invites, setInvites] = useState<Invite[]>([]);
-  const [listError, setListError] = useState<string | null>(null);
-  const [busyInvite, setBusyInvite] = useState<number | null>(null);
-
-  const load = useCallback(async () => {
-    try {
-      const r = await membersApi.list();
-      setMembers(r.users);
-      setInvites(r.invites);
-      setListError(null);
-    } catch (err) {
-      setListError(err instanceof Error ? err.message : 'Could not load users');
-    }
-  }, []);
-
-  useEffect(() => { void load(); }, [load]);
 
   const handleSend = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -387,45 +324,17 @@ export default function InviteUserDialog({ onClose, currentUserId }: Props) {
         email: email.trim(),
         first_name: firstName.trim() || undefined,
         last_name: lastName.trim() || undefined,
+        role,
       });
       setResult(r);
       setEmail('');
       setFirstName('');
       setLastName('');
-      await load();
+      onInvited?.(r);
     } catch (err) {
       setFormError(err instanceof Error ? err.message : 'Could not send invite');
     } finally {
       setSending(false);
-    }
-  };
-
-  const handleResend = async (invite: Invite) => {
-    setBusyInvite(invite.id);
-    setFormError(null);
-    setCopied(false);
-    try {
-      const r = await membersApi.resend(invite.id);
-      setResult(r);
-      await load();
-    } catch (err) {
-      setFormError(err instanceof Error ? err.message : 'Could not resend invite');
-    } finally {
-      setBusyInvite(null);
-    }
-  };
-
-  const handleRevoke = async (invite: Invite) => {
-    setBusyInvite(invite.id);
-    setFormError(null);
-    try {
-      await membersApi.revoke(invite.id);
-      if (result?.invite.id === invite.id) setResult(null);
-      await load();
-    } catch (err) {
-      setFormError(err instanceof Error ? err.message : 'Could not revoke invite');
-    } finally {
-      setBusyInvite(null);
     }
   };
 
@@ -446,9 +355,8 @@ export default function InviteUserDialog({ onClose, currentUserId }: Props) {
 
         <Section>
           <Intro>
-            Users can sign in to manage this workspace — doors, people, credentials and
-            schedules. For someone who only needs to open a door, use <strong>Add person</strong>{' '}
-            instead. Invited users join as admins.
+            Users can sign in to this workspace. For someone who only needs to open a
+            door, use <strong>Add person</strong> on the People view instead.
           </Intro>
 
           <form onSubmit={handleSend}>
@@ -482,6 +390,26 @@ export default function InviteUserDialog({ onClose, currentUserId }: Props) {
                   placeholder="Optional"
                 />
               </Field>
+              <FullSpan>
+                <FieldLabel as="div" style={{ marginBottom: 5 }}>Role</FieldLabel>
+                <RoleOptions role="radiogroup" aria-label="Role">
+                  {ROLE_OPTIONS.map((opt) => (
+                    <RoleOption key={opt.value} $checked={role === opt.value}>
+                      <input
+                        type="radio"
+                        name="invite-role"
+                        value={opt.value}
+                        checked={role === opt.value}
+                        onChange={() => setRole(opt.value)}
+                      />
+                      <span>
+                        <span className="title">{opt.title}</span>
+                        <div className="desc">{opt.desc}</div>
+                      </span>
+                    </RoleOption>
+                  ))}
+                </RoleOptions>
+              </FullSpan>
               {formError && (
                 <FullSpan>
                   <ErrorBanner role="alert">{formError}</ErrorBanner>
@@ -489,6 +417,9 @@ export default function InviteUserDialog({ onClose, currentUserId }: Props) {
               )}
             </Grid>
             <Actions>
+              <SecondaryButton type="button" onClick={onClose}>
+                {result ? 'Done' : 'Cancel'}
+              </SecondaryButton>
               <PrimaryButton type="submit" disabled={sending}>
                 {sending ? 'Sending…' : (<><IconSend size={15} /> Send invite</>)}
               </PrimaryButton>
@@ -499,7 +430,8 @@ export default function InviteUserDialog({ onClose, currentUserId }: Props) {
             <SuccessCard role="status" style={{ marginTop: 12 }}>
               <div>
                 <IconMailForward size={14} style={{ verticalAlign: '-2px', marginRight: 6 }} />
-                Invite for <strong>{result.invite.email}</strong>{' '}
+                Invite for <strong>{result.invite.email}</strong> as{' '}
+                {result.invite.role === 'admin' ? 'an admin' : 'a user'}{' '}
                 {result.delivery === 'email'
                   ? 'sent by email.'
                   : 'created. No email provider is configured on this instance, so share the link below.'}
@@ -512,70 +444,6 @@ export default function InviteUserDialog({ onClose, currentUserId }: Props) {
                 </SecondaryButton>
               </LinkRow>
             </SuccessCard>
-          )}
-        </Section>
-
-        <Section>
-          <SectionTitle>Who can sign in</SectionTitle>
-          {listError && <ErrorBanner role="alert">{listError}</ErrorBanner>}
-          {members === null && !listError ? (
-            <Empty>Loading…</Empty>
-          ) : (
-            <List>
-              {members?.map((m) => (
-                <Row key={`u-${m.id}`}>
-                  <div className="who">
-                    <span className="name">
-                      {m.first_name} {m.last_name}
-                      {m.id === currentUserId && <Badge tone="muted">You</Badge>}
-                      <Badge>{roleLabel(m.role)}</Badge>
-                      {m.status !== 'active' && <Badge tone="warn">{m.status}</Badge>}
-                    </span>
-                    <span className="meta">{m.email}</span>
-                  </div>
-                </Row>
-              ))}
-              {invites.map((inv) => (
-                <Row key={`i-${inv.id}`}>
-                  <div className="who">
-                    <span className="name">
-                      {inv.first_name || inv.last_name
-                        ? `${inv.first_name ?? ''} ${inv.last_name ?? ''}`.trim()
-                        : inv.email}
-                      <Badge tone="warn">{inv.state === 'expired' ? 'Expired' : 'Invited'}</Badge>
-                      <Badge>{roleLabel(inv.role)}</Badge>
-                    </span>
-                    <span className="meta">
-                      {(inv.first_name || inv.last_name) ? `${inv.email} · ` : ''}
-                      {expiryLabel(inv)}
-                      {inv.invited_by ? ` · invited by ${inv.invited_by}` : ''}
-                    </span>
-                  </div>
-                  <div className="actions">
-                    <IconButton
-                      type="button"
-                      title="Resend invite"
-                      disabled={busyInvite === inv.id}
-                      onClick={() => handleResend(inv)}
-                    >
-                      <IconRefresh size={14} />
-                    </IconButton>
-                    <IconButton
-                      type="button"
-                      className="danger"
-                      title="Revoke invite"
-                      disabled={busyInvite === inv.id}
-                      onClick={() => handleRevoke(inv)}
-                    >
-                      <IconTrash size={14} />
-                    </IconButton>
-                  </div>
-                </Row>
-              ))}
-              {members?.length === 0 && invites.length === 0 && (
-                <Empty>No users yet.</Empty>
-              )}
-            </List>
           )}
         </Section>
       </Dialog>

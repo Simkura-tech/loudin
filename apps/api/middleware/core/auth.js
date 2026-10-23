@@ -14,6 +14,7 @@ const { getAuthToken, setAuthCookie, clearAuthCookie } = require('../../utils/au
 const { runAuthGates } = require('../../extensions');
 const { query } = require('../../database/db');
 const installers = require('../../services/tenancy/installers');
+const { liveUser } = require('../../services/auth/members');
 
 function attachUser(decoded, req) {
   req.user = {
@@ -82,6 +83,34 @@ async function enforceServiceSession(req, res) {
 }
 
 /**
+ * The token carries user_type_id and says nothing about status, so without
+ * this an admin's "deactivate" or "remove" would only bite when the token
+ * expired (JWT_EXPIRE, 24h) and a role change would wait just as long.
+ * One primary-key lookup per request keeps both immediate: a gone or
+ * non-active account is logged out with ACCOUNT_DISABLED, and req.user's
+ * role is whatever the row says now.
+ *
+ * Under impersonation req.user.user_id is the actor (the platform admin or
+ * installer user), so this checks the human, not the workspace.
+ *
+ * Returns true when the request may proceed; false when a response was sent.
+ */
+async function enforceLiveAccount(req, res) {
+  const live = await liveUser(req.user.user_id);
+  if (!live) {
+    clearAuthCookie(res);
+    res.status(401).json({
+      error:   'Authentication failed',
+      code:    'ACCOUNT_DISABLED',
+      message: 'This account is no longer active.',
+    });
+    return false;
+  }
+  req.user.user_type_id = live.user_type_id;
+  return true;
+}
+
+/**
  * Require a valid token. Rejects with 401 if missing or invalid.
  */
 async function authenticate(req, res, next) {
@@ -102,6 +131,7 @@ async function authenticate(req, res, next) {
     });
   }
   try {
+    if (!(await enforceLiveAccount(req, res))) return undefined;
     if (!(await enforceServiceSession(req, res))) return undefined;
   } catch (err) {
     return next(err);
