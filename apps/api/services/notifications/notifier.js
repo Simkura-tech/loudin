@@ -68,6 +68,7 @@ function purposeLabel(purpose) {
     case 'login_2fa':       return 'Loudin sign-in code';
     case 'password_reset':  return 'Loudin password reset code';
     case 'verify_email':    return 'Loudin email verification';
+    case 'verify_email_change': return 'Loudin email change';
     case 'verify_phone':    return 'Loudin phone verification';
     default:                return 'Loudin verification code';
   }

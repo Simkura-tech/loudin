@@ -89,4 +89,16 @@ export const membersApi = {
   /** Soft-delete a user. Same guards as update. */
   remove: (userId: number) =>
     api.delete<void, void>(`/api/workspace/members/${userId}`),
+
+  /**
+   * Admin-initiated password reset: email the user the ordinary reset code.
+   * The admin never sees or sets the password — the user finishes on the
+   * public /forgot-password flow. delivery_method is 'console' in dev with
+   * no mail provider wired.
+   */
+  resetPassword: (userId: number) =>
+    api.post<
+      { ok: boolean; delivery_method: 'email' | 'console' },
+      { ok: boolean; delivery_method: 'email' | 'console' }
+    >(`/api/workspace/members/${userId}/reset-password`),
 };

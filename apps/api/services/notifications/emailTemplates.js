@@ -92,6 +92,12 @@ const COPY = {
     intro:     'Use this code to finish verifying your Loudin account:',
     footer:    'This code expires in 10 minutes.',
   },
+  verify_email_change: {
+    subject:   'Confirm your new email — Loudin',
+    preheader: 'Enter this code to start using this address on Loudin.',
+    intro:     'Enter this code to confirm this new email address on your Loudin account:',
+    footer:    'This code expires in 10 minutes. If you didn\'t ask to change your email, ignore this — your current address stays in place.',
+  },
 };
 
 /**

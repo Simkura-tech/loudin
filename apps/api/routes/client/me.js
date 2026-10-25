@@ -9,7 +9,10 @@ const express = require('express');
 const rateLimit = require('express-rate-limit');
 
 const { authenticate } = require('../../middleware/core/auth');
-const { updateProfile, changePassword } = require('../../controllers/auth/me');
+const {
+  updateProfile, changePassword,
+  requestEmailChange, confirmEmailChange,
+} = require('../../controllers/auth/me');
 
 const router = express.Router();
 
@@ -25,6 +28,11 @@ const passwordLimiter = rateLimit({
 
 router.patch('/',          updateProfile);
 router.post ('/password',  passwordLimiter, changePassword);
+
+// Email change is a confirm-by-code flow (controllers/auth/me.js). Rate-limit
+// the send step alongside password changes — both issue an OTP.
+router.post ('/email',         passwordLimiter, requestEmailChange);
+router.post ('/email/confirm', passwordLimiter, confirmEmailChange);
 
 module.exports = router;
 

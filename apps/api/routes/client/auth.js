@@ -20,6 +20,7 @@ const {
   verify2fa,
   twoFactorEnable, twoFactorConfirm, twoFactorDisable,
   forgotPassword, resetPassword,
+  sendEmailVerification, confirmEmailVerification,
   endImpersonation,
 } = require('../../controllers/auth/auth');
 const { redirectToGoogle, handleCallback } = require('../../controllers/auth/googleAuth');
@@ -58,6 +59,10 @@ router.post('/end-impersonation', authenticate, endImpersonation);
 router.post('/2fa/enable',  authenticate, twoFactorEnable);
 router.post('/2fa/confirm', authenticate, twoFactorConfirm);
 router.post('/2fa/disable', authenticate, twoFactorDisable);
+
+// Email verification (soft): the signed-in user confirms their own address.
+router.post('/verify-email/send',    authenticate, sendEmailVerification);
+router.post('/verify-email/confirm', authenticate, confirmEmailVerification);
 
 module.exports = router;
 

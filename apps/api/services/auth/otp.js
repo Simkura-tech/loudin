@@ -12,7 +12,8 @@
  * Used for:
  *   - login_2fa
  *   - password_reset
- *   - verify_email / verify_phone (during 2FA enrollment)
+ *   - verify_email / verify_phone (standalone verification + 2FA enrollment)
+ *   - verify_email_change (code sent to a NEW address during an email change)
  */
 
 const crypto = require('crypto');
@@ -24,7 +25,7 @@ const CODE_LENGTH      = 6;
 const TTL_MS           = 10 * 60 * 1000;     // 10 minutes
 const MAX_ATTEMPTS     = 5;
 const BCRYPT_ROUNDS    = 6;                  // codes are short-lived; cost 6 is fine
-const ALLOWED_PURPOSES = ['login_2fa', 'password_reset', 'verify_email', 'verify_phone'];
+const ALLOWED_PURPOSES = ['login_2fa', 'password_reset', 'verify_email', 'verify_phone', 'verify_email_change'];
 
 /** Cryptographically random 6-digit string, zero-padded. */
 function generateCode() {

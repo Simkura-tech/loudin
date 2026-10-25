@@ -232,7 +232,78 @@ async function register(req, res, next) {
       lastName,
     });
     issueSession(res, createdUser);
+
+    // Email verification is soft: we let the user straight in, but send a
+    // code they can enter from the in-app "verify your email" banner. Best
+    // effort — signup must never fail because mail delivery hiccupped.
+    try {
+      const { code } = await otp.issueCode({
+        userId:      createdUser.id,
+        purpose:     'verify_email',
+        channel:     'email',
+        destination: normalizedEmail,
+      });
+      await notifier.sendCode({ channel: 'email', destination: normalizedEmail, code, purpose: 'verify_email' });
+    } catch (e) {
+      console.error('[auth] failed to send signup verification code:', e.message);
+    }
+
     return res.status(201).json({ user: publicUser(createdUser) });
+  } catch (err) {
+    return next(err);
+  }
+}
+
+// ── POST /api/auth/verify-email/send ──────────────────────────────────────────
+// Auth-only. (Re)sends an email-verification code to the signed-in user's own
+// address. Returns { already_verified: true } as a no-op if nothing to do.
+async function sendEmailVerification(req, res, next) {
+  try {
+    const { rows } = await query(
+      `SELECT id, email, email_verified FROM users WHERE id = $1 AND deleted_at IS NULL`,
+      [req.user.user_id]
+    );
+    if (rows.length === 0) return res.status(401).json({ error: 'Unauthorized' });
+    const user = rows[0];
+    if (user.email_verified) return res.json({ already_verified: true });
+
+    const { code } = await otp.issueCode({
+      userId: user.id, purpose: 'verify_email', channel: 'email', destination: user.email,
+    });
+    const delivery = await notifier.sendCode({
+      channel: 'email', destination: user.email, code, purpose: 'verify_email',
+    });
+    return res.json({
+      already_verified: false,
+      channel:          'email',
+      destination_hint: maskDestination('email', user.email),
+      delivery_method:  delivery.delivered,
+    });
+  } catch (err) {
+    return next(err);
+  }
+}
+
+// ── POST /api/auth/verify-email/confirm ───────────────────────────────────────
+// Body: { code }. Flips email_verified on a correct code.
+async function confirmEmailVerification(req, res, next) {
+  try {
+    const { code } = req.body || {};
+    if (!code) return badRequest(res, 'code is required');
+
+    const result = await otp.verifyCode({
+      userId: req.user.user_id, purpose: 'verify_email', code: String(code).trim(),
+    });
+    if (!result.ok) {
+      return res.status(400).json({ error: 'Bad Request', message: 'Invalid or expired code', code: result.reason });
+    }
+    await query(
+      `UPDATE users
+          SET email_verified = true, email_verified_at = NOW(), updated_at = NOW()
+        WHERE id = $1`,
+      [req.user.user_id]
+    );
+    return res.json({ email_verified: true });
   } catch (err) {
     return next(err);
   }
@@ -694,5 +765,6 @@ module.exports = {
   verify2fa,
   twoFactorEnable, twoFactorConfirm, twoFactorDisable,
   forgotPassword, resetPassword,
+  sendEmailVerification, confirmEmailVerification,
   endImpersonation,
 };

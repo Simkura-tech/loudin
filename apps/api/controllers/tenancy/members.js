@@ -15,6 +15,8 @@ const members = require('../../services/auth/members');
 const { deliverInvite } = require('../../services/auth/inviteDelivery');
 const { recordAudit } = require('../../services/platform/audit');
 const { query } = require('../../database/db');
+const otp = require('../../services/auth/otp');
+const notifier = require('../../services/notifications/notifier');
 
 function sendInviteError(res, err) {
   if (err instanceof invites.InviteError || err instanceof members.MemberError) {
@@ -190,4 +192,42 @@ async function remove(req, res, next) {
   }
 }
 
-module.exports = { list, create, resend, revoke, update, remove };
+// ── POST /api/workspace/members/:id/reset-password ────────────────────────────
+// Admin-initiated password reset: send the target user the ordinary
+// password-reset code. The admin never sees or sets a password — the user
+// finishes on the public /forgot-password flow with their own new password.
+// Tenant-scoped: the target must be a live user of the caller's workspace.
+async function resetPassword(req, res, next) {
+  try {
+    const id = Number(req.params.id);
+    if (!Number.isInteger(id) || id <= 0) {
+      return res.status(400).json({ error: 'Bad Request', message: 'Invalid user id' });
+    }
+    const { rows } = await query(
+      'SELECT id, email FROM users WHERE id = $1 AND company_id = $2 AND deleted_at IS NULL',
+      [id, req.user.company_id]
+    );
+    if (rows.length === 0) {
+      return res.status(404).json({ error: 'MEMBER_NOT_FOUND', code: 'MEMBER_NOT_FOUND', message: 'User not found in this workspace' });
+    }
+    const target = rows[0];
+
+    const { code } = await otp.issueCode({
+      userId: target.id, purpose: 'password_reset', channel: 'email', destination: target.email,
+    });
+    const delivery = await notifier.sendCode({
+      channel: 'email', destination: target.email, code, purpose: 'password_reset',
+    });
+
+    recordAudit(req, 'user.password_reset_sent', {
+      target_type: 'user', target_id: target.id,
+      metadata: { email: target.email, delivery: delivery.delivered },
+    });
+
+    return res.json({ ok: true, delivery_method: delivery.delivered });
+  } catch (err) {
+    return next(err);
+  }
+}
+
+module.exports = { list, create, resend, revoke, update, remove, resetPassword };

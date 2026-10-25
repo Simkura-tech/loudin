@@ -269,13 +269,16 @@ async function acceptInvite({ token, firstName, lastName, password, termsAccepte
     }
 
     const { rows: [user] } = await client.query(
+      // email_verified = true: the invite link was delivered to this address
+      // and the invitee followed it, so control of the inbox is proven.
       `INSERT INTO users (
          company_id, user_type_id, email, first_name, last_name,
          password_hash, status,
+         email_verified, email_verified_at,
          terms_accepted_at, terms_version,
          privacy_accepted_at, privacy_version
        )
-       VALUES ($1, $2, $3, $4, $5, $6, 'active', NOW(), $7, NOW(), $8)
+       VALUES ($1, $2, $3, $4, $5, $6, 'active', true, NOW(), NOW(), $7, NOW(), $8)
        RETURNING id, email, first_name, last_name, phone_number,
                  user_type_id, company_id, email_verified, phone_verified`,
       [

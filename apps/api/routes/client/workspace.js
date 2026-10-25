@@ -37,6 +37,7 @@ router.post  ('/invites/:id/resend',  requireAdmin, denyImpersonation, members.r
 router.delete('/invites/:id',         requireAdmin, denyImpersonation, members.revoke);
 router.patch ('/members/:id',         requireAdmin, denyImpersonation, members.update);
 router.delete('/members/:id',         requireAdmin, denyImpersonation, members.remove);
+router.post  ('/members/:id/reset-password', requireAdmin, denyImpersonation, members.resetPassword);
 
 // Installer access — which installer companies may work in this workspace
 // (controllers/tenancy/installers.js → workspace.*).

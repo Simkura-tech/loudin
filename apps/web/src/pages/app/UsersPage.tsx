@@ -27,6 +27,7 @@ import {
   IconTrash,
   IconUserOff,
   IconUserCheck,
+  IconKey,
   IconX,
 } from '@tabler/icons-react';
 import {
@@ -296,6 +297,16 @@ const ErrorBanner = styled.div`
   margin-bottom: 16px;
 `;
 
+const NoticeBanner = styled.div`
+  padding: 10px 12px;
+  border-radius: 8px;
+  background: #dcfce7;
+  border: 1px solid #bbf7d0;
+  color: #166534;
+  font-size: 13px;
+  margin-bottom: 16px;
+`;
+
 /* Inline role control in the Role cell; reads as text until hovered. */
 const RoleSelect = styled.select`
   height: 28px;
@@ -453,6 +464,7 @@ export function UsersPage() {
   const [members, setMembers] = useState<Member[] | null>(null);
   const [invites, setInvites] = useState<Invite[]>([]);
   const [error, setError] = useState<string | null>(null);
+  const [notice, setNotice] = useState<string | null>(null);
   const [search, setSearch] = useState('');
   const [roleFilter, setRoleFilter] = useState<MemberRole | ''>('');
   const [inviteOpen, setInviteOpen] = useState(false);
@@ -543,6 +555,24 @@ export function UsersPage() {
     }
   };
 
+  const handleSendReset = async (member: Member) => {
+    setBusyUser(member.id);
+    setError(null);
+    setNotice(null);
+    try {
+      const r = await membersApi.resetPassword(member.id);
+      setNotice(
+        r.delivery_method === 'console'
+          ? `Reset code generated for ${member.email} — no mail provider is configured, so it's in the API server log.`
+          : `Password reset email sent to ${member.email}.`
+      );
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Could not send password reset');
+    } finally {
+      setBusyUser(null);
+    }
+  };
+
   const handleRemove = async () => {
     if (!removeTarget) return;
     setRemoving(true);
@@ -586,6 +616,7 @@ export function UsersPage() {
       <PeopleViewTabs />
 
       {error && <ErrorBanner role="alert">{error}</ErrorBanner>}
+      {notice && <NoticeBanner role="status">{notice}</NoticeBanner>}
 
       <Toolbar>
         <SearchWrap>
@@ -693,6 +724,14 @@ export function UsersPage() {
                             <IconUserCheck size={14} />
                           </IconButton>
                         ) : null}
+                        <IconButton
+                          type="button"
+                          title="Send password reset: emails this user a reset code"
+                          disabled={busyUser === row.member.id}
+                          onClick={() => handleSendReset(row.member)}
+                        >
+                          <IconKey size={14} />
+                        </IconButton>
                         <IconButton
                           type="button"
                           className="danger"

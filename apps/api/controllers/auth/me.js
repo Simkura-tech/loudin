@@ -10,11 +10,22 @@
 
 const { query } = require('../../database/db');
 const { hashPassword, comparePassword, validatePasswordStrength } = require('../../utils/password');
+const otp = require('../../services/auth/otp');
+const notifier = require('../../services/notifications/notifier');
 
 const EDITABLE_PROFILE_FIELDS = ['first_name', 'last_name', 'phone_number'];
+const EMAIL_RE = /^[^@\s]+@[^@\s]+\.[^@\s]+$/;
 
 function badRequest(res, message, details) {
   return res.status(400).json({ error: 'Bad Request', message, ...(details && { details }) });
+}
+
+/** "alice@example.com" → "a••••@example.com" — hint without disclosing. */
+function maskEmail(dest) {
+  const [user, domain] = String(dest).split('@');
+  if (!domain) return dest;
+  const head = user[0] ?? '';
+  return `${head}${'•'.repeat(Math.max(1, user.length - 1))}@${domain}`;
 }
 
 function publicProfile(row, company) {
@@ -137,4 +148,117 @@ async function changePassword(req, res, next) {
   }
 }
 
-module.exports = { updateProfile, changePassword };
+// ── POST /api/me/email ────────────────────────────────────────────────────────
+// Body: { new_email, current_password? }. Starts an email change: parks the
+// new address in users.pending_email and sends a confirmation code TO that
+// address. current_password is required for password accounts (so a hijacked
+// session can't silently move the login address); OAuth-only accounts (no
+// password_hash) skip it. Nothing changes until confirmEmailChange().
+async function requestEmailChange(req, res, next) {
+  try {
+    const { new_email, current_password } = req.body || {};
+    if (!new_email) return badRequest(res, 'new_email is required');
+    const normalized = String(new_email).trim().toLowerCase();
+    if (!EMAIL_RE.test(normalized)) return badRequest(res, 'Enter a valid email address');
+
+    const { rows } = await query(
+      'SELECT id, email, password_hash FROM users WHERE id = $1 AND deleted_at IS NULL',
+      [req.user.user_id]
+    );
+    if (rows.length === 0) return res.status(404).json({ error: 'Not Found', message: 'User not found' });
+    const user = rows[0];
+
+    if (normalized === user.email) return badRequest(res, 'That is already your email address');
+
+    if (user.password_hash) {
+      if (!current_password) return badRequest(res, 'current_password is required to change your email');
+      const ok = await comparePassword(current_password, user.password_hash);
+      if (!ok) return res.status(401).json({ error: 'Unauthorized', message: 'Current password is incorrect' });
+    }
+
+    // Live-only uniqueness (migration 093). Checked here for a friendly error;
+    // re-checked atomically by the unique index on confirm.
+    const dup = await query('SELECT 1 FROM users WHERE email = $1 AND deleted_at IS NULL', [normalized]);
+    if (dup.rowCount > 0) return res.status(409).json({ error: 'Conflict', message: 'That email is already in use' });
+
+    await query('UPDATE users SET pending_email = $1, updated_at = NOW() WHERE id = $2', [normalized, user.id]);
+
+    const { code } = await otp.issueCode({
+      userId: user.id, purpose: 'verify_email_change', channel: 'email', destination: normalized,
+    });
+    const delivery = await notifier.sendCode({
+      channel: 'email', destination: normalized, code, purpose: 'verify_email_change',
+    });
+    return res.json({
+      ok:               true,
+      pending_email:    normalized,
+      destination_hint: maskEmail(normalized),
+      delivery_method:  delivery.delivered,
+    });
+  } catch (err) {
+    return next(err);
+  }
+}
+
+// ── POST /api/me/email/confirm ────────────────────────────────────────────────
+// Body: { code }. Commits pending_email → email on a correct code and marks
+// the new address verified.
+async function confirmEmailChange(req, res, next) {
+  try {
+    const { code } = req.body || {};
+    if (!code) return badRequest(res, 'code is required');
+
+    const { rows } = await query(
+      'SELECT id, pending_email FROM users WHERE id = $1 AND deleted_at IS NULL',
+      [req.user.user_id]
+    );
+    if (rows.length === 0) return res.status(404).json({ error: 'Not Found', message: 'User not found' });
+    const user = rows[0];
+    if (!user.pending_email) return badRequest(res, 'No email change is pending');
+
+    const result = await otp.verifyCode({
+      userId: user.id, purpose: 'verify_email_change', code: String(code).trim(),
+    });
+    if (!result.ok) {
+      return res.status(400).json({ error: 'Bad Request', message: 'Invalid or expired code', code: result.reason });
+    }
+
+    let updated;
+    try {
+      const r = await query(
+        `WITH updated AS (
+           UPDATE users
+              SET email = pending_email, pending_email = NULL,
+                  email_verified = true, email_verified_at = NOW(),
+                  updated_at = NOW()
+            WHERE id = $1
+            RETURNING *
+         )
+         SELECT u.id, u.email, u.first_name, u.last_name, u.phone_number,
+                u.user_type_id, u.company_id, u.email_verified, u.phone_verified,
+                c.company_type, c.name
+           FROM updated u
+           JOIN companies c ON c.id = u.company_id`,
+        [user.id]
+      );
+      updated = r.rows[0];
+    } catch (e) {
+      if (e.code === '23505') {
+        // Someone claimed the address between request and confirm.
+        await query('UPDATE users SET pending_email = NULL WHERE id = $1', [user.id]);
+        return res.status(409).json({ error: 'Conflict', message: 'That email was just taken — try a different address' });
+      }
+      throw e;
+    }
+    return res.json({
+      user: publicProfile(updated, { company_type: updated.company_type, name: updated.name }),
+    });
+  } catch (err) {
+    return next(err);
+  }
+}
+
+module.exports = {
+  updateProfile, changePassword,
+  requestEmailChange, confirmEmailChange,
+};

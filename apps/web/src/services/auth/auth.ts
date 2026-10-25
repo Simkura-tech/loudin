@@ -121,6 +121,19 @@ export const auth = {
       api.post<{ two_factor_enabled: false }, { two_factor_enabled: false }>('/api/auth/2fa/disable'),
   },
 
+  /** Email verification (soft): send a code to the signed-in user's own
+   *  address, then confirm it. `already_verified` short-circuits the send. */
+  verifyEmail: {
+    send: () =>
+      api.post<
+        { already_verified: boolean; destination_hint?: string; delivery_method?: 'email'|'console' },
+        { already_verified: boolean; destination_hint?: string; delivery_method?: 'email'|'console' }
+      >('/api/auth/verify-email/send'),
+    confirm: (code: string) =>
+      api.post<{ email_verified: true }, { email_verified: true }>(
+        '/api/auth/verify-email/confirm', { code }),
+  },
+
   /**
    * Probe the current session. Returns the user when authenticated, null
    * otherwise. Uses the api.ts skip-401-redirect hatch so anonymous app loads

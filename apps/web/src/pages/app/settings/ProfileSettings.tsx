@@ -14,6 +14,7 @@ import styled from '@emotion/styled';
 import { IconCheck } from '@tabler/icons-react';
 import { useAuth } from '../../../contexts/AuthContext';
 import { meApi } from '../../../services/auth/me';
+import { auth } from '../../../services/auth/auth';
 
 // ── Shared shell (mirrors WorkspaceSettings) ─────────────────────────────────
 
@@ -142,6 +143,46 @@ const Banner = styled.div<{ $tone: 'error' | 'success' }>`
   color: ${({ $tone }) => ($tone === 'error' ? '#991b1b' : '#166534')};
 `;
 
+const EmailCurrent = styled.div`
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+  font-size: 13px;
+  .addr { font-weight: 500; }
+`;
+
+const StatusPill = styled.span<{ $ok: boolean }>`
+  display: inline-flex;
+  align-items: center;
+  height: 20px;
+  padding: 0 8px;
+  border-radius: 999px;
+  font-size: 11px;
+  font-weight: 600;
+  background: ${({ $ok }) => ($ok ? '#dcfce7' : '#fef9c3')};
+  color: ${({ $ok }) => ($ok ? '#166534' : '#854d0e')};
+`;
+
+const EmailBlock = styled.div`
+  margin-top: 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  max-width: 420px;
+`;
+
+const CodeRow = styled.div`
+  display: flex;
+  gap: 8px;
+  align-items: center;
+`;
+
+const InlineActions = styled.div`
+  display: flex;
+  gap: 8px;
+`;
+
 // ── Component ─────────────────────────────────────────────────────────────────
 
 interface ProfileForm {
@@ -174,6 +215,79 @@ export function ProfileSettings() {
   const [pwSaving,      setPwSaving]      = useState(false);
   const [pwError,       setPwError]       = useState<string | null>(null);
   const [pwOk,          setPwOk]          = useState(false);
+
+  // Email verification (shown when the current address is unverified).
+  const [verifyStage, setVerifyStage] = useState<'idle' | 'sent'>('idle');
+  const [verifyCode,  setVerifyCode]  = useState('');
+  const [verifyHint,  setVerifyHint]  = useState<string | null>(null);
+  const [verifyConsole, setVerifyConsole] = useState(false);
+  const [emailBusy,   setEmailBusy]   = useState(false);
+  const [emailError,  setEmailError]  = useState<string | null>(null);
+  const [emailOk,     setEmailOk]     = useState<string | null>(null);
+
+  // Email change flow.
+  const [changeStage, setChangeStage] = useState<'idle' | 'request' | 'confirm'>('idle');
+  const [newEmail,    setNewEmail]    = useState('');
+  const [changePw,    setChangePw]    = useState('');
+  const [changeCode,  setChangeCode]  = useState('');
+  const [changeHint,  setChangeHint]  = useState<string | null>(null);
+  const [changeConsole, setChangeConsole] = useState(false);
+
+  const resetEmailFlows = () => {
+    setVerifyStage('idle'); setVerifyCode(''); setVerifyHint(null); setVerifyConsole(false);
+    setChangeStage('idle'); setNewEmail(''); setChangePw(''); setChangeCode('');
+    setChangeHint(null); setChangeConsole(false);
+    setEmailError(null); setEmailOk(null);
+  };
+
+  const sendVerify = async () => {
+    setEmailError(null); setEmailOk(null); setEmailBusy(true);
+    try {
+      const r = await auth.verifyEmail.send();
+      if (r.already_verified) { await refresh(); return; }
+      setVerifyHint(r.destination_hint ?? null);
+      setVerifyConsole(r.delivery_method === 'console');
+      setVerifyStage('sent');
+    } catch (err) {
+      setEmailError(err instanceof Error ? err.message : 'Could not send code');
+    } finally { setEmailBusy(false); }
+  };
+
+  const confirmVerify = async () => {
+    setEmailError(null); setEmailBusy(true);
+    try {
+      await auth.verifyEmail.confirm(verifyCode.trim());
+      await refresh();
+      resetEmailFlows();
+      setEmailOk('Email verified.');
+    } catch (err) {
+      setEmailError(err instanceof Error ? err.message : 'Could not verify code');
+    } finally { setEmailBusy(false); }
+  };
+
+  const requestChange = async () => {
+    setEmailError(null); setEmailOk(null); setEmailBusy(true);
+    try {
+      const r = await meApi.requestEmailChange(newEmail.trim(), changePw || undefined);
+      setChangeHint(r.destination_hint);
+      setChangeConsole(r.delivery_method === 'console');
+      setChangeStage('confirm');
+    } catch (err) {
+      setEmailError(err instanceof Error ? err.message : 'Could not start email change');
+    } finally { setEmailBusy(false); }
+  };
+
+  const confirmChange = async () => {
+    setEmailError(null); setEmailBusy(true);
+    try {
+      await meApi.confirmEmailChange(changeCode.trim());
+      await refresh();
+      resetEmailFlows();
+      setEmailOk('Email address updated.');
+    } catch (err) {
+      setEmailError(err instanceof Error ? err.message : 'Could not confirm email change');
+    } finally { setEmailBusy(false); }
+  };
 
   useEffect(() => {
     if (!user) return;
@@ -281,13 +395,6 @@ export function ProfileSettings() {
               />
             </Row>
             <Row>
-              <Label>Email</Label>
-              <div>
-                <Input value={user.email} disabled />
-                <Hint>Email changes are coming soon. Contact support if you need this updated.</Hint>
-              </div>
-            </Row>
-            <Row>
               <Label htmlFor="me-phone">Phone</Label>
               <Input
                 id="me-phone"
@@ -310,6 +417,119 @@ export function ProfileSettings() {
           </Actions>
         </Card>
       </form>
+
+      <Card>
+        <CardHeader>
+          <h2>Email address</h2>
+          <div className="sub">Used to sign in and receive account emails.</div>
+        </CardHeader>
+        <CardBody>
+          <EmailCurrent>
+            <span className="addr">{user.email}</span>
+            <StatusPill $ok={user.email_verified}>
+              {user.email_verified ? 'Verified' : 'Unverified'}
+            </StatusPill>
+          </EmailCurrent>
+
+          {/* Verify the current address (soft nudge) */}
+          {!user.email_verified && changeStage === 'idle' && (
+            <EmailBlock>
+              {verifyStage === 'idle' ? (
+                <SecondaryButton type="button" onClick={sendVerify} disabled={emailBusy}>
+                  {emailBusy ? 'Sending…' : 'Send verification code'}
+                </SecondaryButton>
+              ) : (
+                <>
+                  <Hint>
+                    Enter the 6-digit code sent to {verifyHint ?? 'your email'}.
+                    {verifyConsole && ' (No mail provider configured — check the API server log.)'}
+                  </Hint>
+                  <CodeRow>
+                    <Input
+                      value={verifyCode}
+                      onChange={(e) => setVerifyCode(e.target.value)}
+                      placeholder="123456" inputMode="numeric" maxLength={6}
+                      style={{ maxWidth: 140 }}
+                    />
+                    <PrimaryButton type="button" onClick={confirmVerify} disabled={emailBusy || !verifyCode.trim()}>
+                      {emailBusy ? 'Verifying…' : 'Confirm'}
+                    </PrimaryButton>
+                    <SecondaryButton type="button" onClick={resetEmailFlows} disabled={emailBusy}>
+                      Cancel
+                    </SecondaryButton>
+                  </CodeRow>
+                </>
+              )}
+            </EmailBlock>
+          )}
+
+          {/* Change to a different address */}
+          {verifyStage === 'idle' && (
+            changeStage === 'idle' ? (
+              <EmailBlock>
+                <div>
+                  <SecondaryButton type="button" onClick={() => { resetEmailFlows(); setChangeStage('request'); }}>
+                    Change email
+                  </SecondaryButton>
+                </div>
+              </EmailBlock>
+            ) : changeStage === 'request' ? (
+              <EmailBlock>
+                <Row>
+                  <Label htmlFor="new-email">New email</Label>
+                  <Input
+                    id="new-email" type="email" value={newEmail}
+                    onChange={(e) => setNewEmail(e.target.value)}
+                    placeholder="you@company.com" autoComplete="off"
+                  />
+                </Row>
+                <Row>
+                  <Label htmlFor="change-pw">Current password</Label>
+                  <div>
+                    <Input
+                      id="change-pw" type="password" value={changePw}
+                      onChange={(e) => setChangePw(e.target.value)}
+                      autoComplete="current-password"
+                    />
+                    <Hint>Confirms it&apos;s you. Leave blank only if you sign in with Google.</Hint>
+                  </div>
+                </Row>
+                <InlineActions>
+                  <PrimaryButton type="button" onClick={requestChange} disabled={emailBusy || !newEmail.trim()}>
+                    {emailBusy ? 'Sending…' : 'Send confirmation code'}
+                  </PrimaryButton>
+                  <SecondaryButton type="button" onClick={resetEmailFlows} disabled={emailBusy}>
+                    Cancel
+                  </SecondaryButton>
+                </InlineActions>
+              </EmailBlock>
+            ) : (
+              <EmailBlock>
+                <Hint>
+                  Enter the 6-digit code sent to {changeHint ?? 'the new address'}.
+                  {changeConsole && ' (No mail provider configured — check the API server log.)'}
+                </Hint>
+                <CodeRow>
+                  <Input
+                    value={changeCode}
+                    onChange={(e) => setChangeCode(e.target.value)}
+                    placeholder="123456" inputMode="numeric" maxLength={6}
+                    style={{ maxWidth: 140 }}
+                  />
+                  <PrimaryButton type="button" onClick={confirmChange} disabled={emailBusy || !changeCode.trim()}>
+                    {emailBusy ? 'Confirming…' : 'Confirm change'}
+                  </PrimaryButton>
+                  <SecondaryButton type="button" onClick={resetEmailFlows} disabled={emailBusy}>
+                    Cancel
+                  </SecondaryButton>
+                </CodeRow>
+              </EmailBlock>
+            )
+          )}
+        </CardBody>
+        {emailError && <Banner $tone="error" role="alert">{emailError}</Banner>}
+        {emailOk && <Banner $tone="success">{emailOk}</Banner>}
+      </Card>
 
       <form onSubmit={handlePwSave}>
         <Card>

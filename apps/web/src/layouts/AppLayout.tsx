@@ -21,6 +21,7 @@ import {
   IconLogout,
   IconChevronDown,
   IconTool,
+  IconMail,
 } from '@tabler/icons-react';
 import { useAuth } from '../contexts/AuthContext';
 import { workspaceApi } from '../services/tenancy/workspace';
@@ -337,6 +338,48 @@ const NameWorkspaceBanner = styled.div`
   .err { flex-basis: 100%; color: #991b1b; font-size: 12px; }
 `;
 
+const VerifyEmailBanner = styled.div`
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 10px 14px;
+  background: #fffbeb;
+  border-bottom: 1px solid #fde68a;
+  color: ${({ theme }) => theme.colors.text.primary};
+  font-size: 13px;
+  flex-wrap: wrap;
+
+  .icon  { flex-shrink: 0; color: #b45309; }
+  .body  { flex: 1; min-width: 180px; }
+  .title { font-weight: 600; }
+  .meta  { font-size: 12px; color: ${({ theme }) => theme.colors.text.secondary}; margin-top: 1px; }
+
+  .verify {
+    height: 34px;
+    display: inline-flex;
+    align-items: center;
+    padding: 0 14px;
+    border-radius: 8px;
+    background: #b45309;
+    color: #fff;
+    font-size: 13px;
+    font-weight: 600;
+    text-decoration: none;
+    font-family: inherit;
+  }
+  .later {
+    background: transparent;
+    border: none;
+    color: ${({ theme }) => theme.colors.text.tertiary};
+    font-size: 12px;
+    font-weight: 500;
+    cursor: pointer;
+    font-family: inherit;
+    padding: 4px 6px;
+  }
+  .later:hover { color: ${({ theme }) => theme.colors.text.primary}; }
+`;
+
 const ImpersonationBanner = styled.div`
   display: flex;
   align-items: center;
@@ -384,6 +427,13 @@ export function AppLayout() {
   const [namePromptDismissed, setNamePromptDismissed] = useState(() => {
     try { return sessionStorage.getItem('loudin.nameWorkspaceDismissed') === '1'; } catch { return false; }
   });
+  const [verifyEmailDismissed, setVerifyEmailDismissed] = useState(() => {
+    try { return sessionStorage.getItem('loudin.verifyEmailDismissed') === '1'; } catch { return false; }
+  });
+  const dismissVerifyEmail = () => {
+    try { sessionStorage.setItem('loudin.verifyEmailDismissed', '1'); } catch { /* ignore */ }
+    setVerifyEmailDismissed(true);
+  };
 
   if (!user) return null; // ProtectedRoute should guard, this is belt-and-braces.
 
@@ -403,6 +453,11 @@ export function AppLayout() {
   // Only admins can rename the workspace (PATCH /api/workspace is admin-only),
   // so only they see the prompt. Hidden while impersonating.
   const showNamePrompt = !isImpersonating && isAdmin && user.name_auto_generated && !namePromptDismissed;
+
+  // Soft email-verification nudge: shown to the signed-in user until their
+  // address is verified. Hidden while impersonating (the actor's own session
+  // carries verification, not the tenant's). Dismissible for the session.
+  const showVerifyEmail = !isImpersonating && !user.email_verified && !verifyEmailDismissed;
 
   // Fork-supplied sidebar entries (src/extensions/index.ts — empty upstream).
   const extNav = extensions.navItems.filter((item) => !item.visible || item.visible(user));
@@ -687,6 +742,21 @@ export function AppLayout() {
             </button>
             {nameError && <div className="err" role="alert">{nameError}</div>}
           </NameWorkspaceBanner>
+        )}
+        {showVerifyEmail && (
+          <VerifyEmailBanner role="status">
+            <IconMail className="icon" size={18} />
+            <div className="body">
+              <div className="title">Verify your email</div>
+              <div className="meta">
+                Confirm {user.email} to secure your account and make sure you can recover it.
+              </div>
+            </div>
+            <Link className="verify" to="/app/settings/profile">Verify email</Link>
+            <button type="button" className="later" onClick={dismissVerifyEmail}>
+              Later
+            </button>
+          </VerifyEmailBanner>
         )}
         <ContentWrap>
           <Outlet />
